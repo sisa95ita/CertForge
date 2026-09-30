@@ -1,0 +1,73 @@
+{
+  "id": "8a2f07aa-cb76-47a8-8dd2-8c80957c8fd0",
+  "schemaVersion": 1,
+  "version": 1,
+  "title": "CertForge Demo Question Bank",
+  "description": "A small, generic bank for trying CertForge. These are demonstration questions, not certification preparation material.",
+  "certification": {
+    "name": "CertForge Demonstration",
+    "code": "DEMO-101"
+  },
+  "questions": [
+    {
+      "id": "demo-q001",
+      "domain": "Web fundamentals",
+      "topic": "HTTP",
+      "difficulty": "easy",
+      "type": "single-choice",
+      "question": "Which HTTP method is conventionally used to retrieve a resource without changing it?",
+      "answers": [
+        { "id": "a", "text": "GET" },
+        { "id": "b", "text": "POST" },
+        { "id": "c", "text": "DELETE" },
+        { "id": "d", "text": "PATCH" }
+      ],
+      "correctAnswers": ["a"],
+      "explanation": "GET requests retrieve a representation of a resource and are defined as safe, meaning they should not request a state change.",
+      "learnReference": {
+        "title": "HTTP request methods",
+        "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/http-requests"
+      }
+    },
+    {
+      "id": "demo-q002",
+      "domain": "Programming fundamentals",
+      "topic": "TypeScript",
+      "difficulty": "medium",
+      "type": "multiple-choice",
+      "question": "Which two benefits does TypeScript add to a JavaScript project?",
+      "answers": [
+        { "id": "a", "text": "Static type checking" },
+        { "id": "b", "text": "Automatic database backups" },
+        { "id": "c", "text": "Editor tooling based on types" },
+        { "id": "d", "text": "A built-in web server" }
+      ],
+      "correctAnswers": ["a", "c"],
+      "explanation": "TypeScript checks types before runtime and lets editors provide type-aware navigation, completion, and refactoring.",
+      "learnReference": {
+        "title": "TypeScript overview",
+        "url": "https://learn.microsoft.com/en-us/training/modules/typescript-get-started/2-typescript-overview"
+      }
+    },
+    {
+      "id": "demo-q003",
+      "domain": "Data fundamentals",
+      "topic": "Relational data",
+      "difficulty": "easy",
+      "type": "single-choice",
+      "question": "What does a primary key do in a relational table?",
+      "answers": [
+        { "id": "a", "text": "Encrypts every row" },
+        { "id": "b", "text": "Uniquely identifies each row" },
+        { "id": "c", "text": "Sorts all queries automatically" },
+        { "id": "d", "text": "Duplicates related rows" }
+      ],
+      "correctAnswers": ["b"],
+      "explanation": "A primary key supplies a unique, non-null identity for each row in a table.",
+      "learnReference": {
+        "title": "Primary and foreign keys",
+        "url": "https://learn.microsoft.com/en-us/sql/relational-databases/tables/primary-and-foreign-key-constraints"
+      }
+    }
+  ]
+}

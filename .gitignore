@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+coverage/
+.env*.local
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite-*
+*.log
+*.tsbuildinfo
