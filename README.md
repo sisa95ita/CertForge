@@ -87,3 +87,13 @@ Schema version 1 supports `single-choice` and `multiple-choice`. Multiple-choice
 ```
 
 [`examples/demo-question-bank.json`](examples/demo-question-bank.json) is a small generic bank demonstrating both question types, domains, topics, explanations, and references. It is demo data—not certification study content.
+
+## Simulations and scoring (V1.1)
+
+Choose **All available** to include the entire filtered pool, or **Custom** for the existing random, domain-aware selection. Question and answer option orders are randomized at creation and saved in each simulation snapshot.
+
+History lists individual completed attempts with **Review** and **Retry**. Retry creates a fresh attempt in the same mode, with the same time limit and historical question content, even after bank updates. Question and option order are shuffled again; answers, review flags, and timing start fresh. Progress separately aggregates completed attempts.
+
+Single-choice scoring remains binary. Multiple-choice questions allow at most the required number of selections and earn credit for each correctly selected component, without negative marking. Training evaluates only after confirmation. Overall, domain, and topic percentages use earned credit divided by question count.
+
+SQLite migrates automatically to schema version 2 without changing imported banks, historical snapshots, or previously recorded scores. Existing evaluated questions retain their original binary credit; new attempts use fractional credit.

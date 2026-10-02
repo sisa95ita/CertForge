@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SimulationView } from "@/lib/types";
+import { canSelectAnswer } from "@/lib/evaluation";
 import { formatDuration } from "@/lib/statistics";
 
 export function SimulationRunner({ initial }: { initial: SimulationView }) {
@@ -48,14 +49,19 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
   }, [remaining, simulation.mode]);
 
   async function choose(optionId: string, checked: boolean) {
+    if (busy || item.locked || (checked && item.question.type === "multiple-choice" && !canSelectAnswer(item.selectedAnswers, optionId, item.question.correctAnswers.length))) return;
+    const previous = simulation;
+    setBusy(true);
     const selected = item.question.type === "single-choice" ? [optionId] : checked ? [...item.selectedAnswers, optionId] : item.selectedAnswers.filter((answer) => answer !== optionId);
     setSimulation((current) => ({ ...current, questions: current.questions.map((question, index) => index === position ? { ...question, selectedAnswers: selected } : question) }));
     setError("");
     try { await patch({ action: "answers", position, answers: selected }); }
-    catch (value) { setError(value instanceof Error ? value.message : "Could not save answer"); router.refresh(); }
+    catch (value) { setSimulation(previous); setError(value instanceof Error ? value.message : "Could not save answer"); }
+    finally { setBusy(false); }
   }
 
   async function navigate(next: number) {
+    if (busy) return;
     if (next < 0 || next >= simulation.questions.length) return;
     setPosition(next); setError("");
     try { await patch({ action: "navigate", position: next }); } catch (value) { setError(value instanceof Error ? value.message : "Could not save position"); }
@@ -74,6 +80,7 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
     try { await patch({ action: "review", position, value }); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save review flag"); }
   }
 
+  const partial = item.evaluation?.status === "partial";
   const allTrainingLocked = simulation.questions.every((question) => question.locked);
   return <div className="mx-auto max-w-5xl">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><span className="badge capitalize">{simulation.mode}</span><span className="muted ml-3 text-sm">Question {position + 1} of {simulation.questions.length}</span></div><div className={`font-mono text-sm font-bold ${remaining !== null && remaining < 60 ? "bad" : ""}`}>{remaining === null ? `Study time ${formatDuration(elapsed)}` : `Time left ${formatDuration(remaining)}`}</div></div>
@@ -81,18 +88,18 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
       <section className="card p-6 sm:p-8">
         <div className="mb-4 flex flex-wrap gap-2"><span className="badge">{item.question.domain}</span><span className="badge">{item.question.topic}</span><span className="badge capitalize">{item.question.difficulty}</span></div>
         <h1 className="text-xl font-extrabold leading-8">{item.question.question}</h1>
-        {item.question.type === "multiple-choice" && <p className="muted mt-2 text-sm">Select all answers that apply.</p>}
+        {item.question.type === "multiple-choice" && <p className="muted mt-2 text-sm">Select {item.question.correctAnswers.length} answers.</p>}
         <div className="mt-6 space-y-3">{item.question.answers.map((option) => {
           const selected = item.selectedAnswers.includes(option.id); const correctOption = item.question.correctAnswers.includes(option.id);
           const resultStyle = item.locked && correctOption ? "border-green-500 bg-green-50" : item.locked && selected && !correctOption ? "border-red-400 bg-red-50" : selected ? "border-blue-500 bg-blue-50" : "border-slate-200";
-          return <label className={`flex gap-3 rounded-xl border-2 p-4 ${resultStyle} ${item.locked ? "cursor-default" : "cursor-pointer"}`} key={option.id}><input disabled={item.locked || busy} type={item.question.type === "single-choice" ? "radio" : "checkbox"} name={`q-${position}`} checked={selected} onChange={(event) => void choose(option.id, event.target.checked)} /><span><strong className="mr-2 uppercase">{option.id}.</strong>{option.text}</span></label>;
+          return <label className={`flex gap-3 rounded-xl border-2 p-4 ${resultStyle} ${item.locked ? "cursor-default" : "cursor-pointer"}`} key={option.id}><input disabled={item.locked || busy || (item.question.type === "multiple-choice" && !canSelectAnswer(item.selectedAnswers, option.id, item.question.correctAnswers.length))} type={item.question.type === "single-choice" ? "radio" : "checkbox"} name={`q-${position}`} checked={selected} onChange={(event) => void choose(option.id, event.target.checked)} /><span><strong className="mr-2 uppercase">{option.id}.</strong>{option.text}{item.locked && <span className="ml-2 text-xs font-bold">{correctOption ? (selected ? "Selected correctly" : "Correct answer") : selected ? "Selected incorrectly" : ""}</span>}</span></label>;
         })}</div>
         {simulation.mode === "training" && !item.locked && <button disabled={busy || !item.selectedAnswers.length} className="btn btn-primary mt-6" onClick={confirmAnswer}>Confirm answer</button>}
-        {simulation.mode === "training" && item.locked && <div className={`mt-6 rounded-xl border p-5 ${item.correct ? "border-green-300 bg-green-50" : "border-red-300 bg-red-50"}`}><h2 className={`font-extrabold ${item.correct ? "good" : "bad"}`}>{item.correct ? "Correct" : "Incorrect"}</h2><p className="mt-2 leading-7">{item.question.explanation}</p>{item.question.learnReference && <a className="mt-3 inline-block font-bold text-blue-700 underline" href={item.question.learnReference.url} target="_blank" rel="noreferrer">{item.question.learnReference.title} ↗</a>}</div>}
+        {simulation.mode === "training" && item.locked && <div className={`mt-6 rounded-xl border p-5 ${item.correct ? "border-green-300 bg-green-50" : partial ? "border-amber-300 bg-amber-50" : "border-red-300 bg-red-50"}`}><h2 className={`font-extrabold ${item.correct ? "good" : partial ? "text-amber-700" : "bad"}`}>{item.correct ? "Correct" : partial ? "Partially correct" : "Incorrect"}</h2>{partial && <p className="mt-1 text-sm text-amber-800">{item.selectedAnswers.filter((id) => item.question.correctAnswers.includes(id)).length} / {item.question.correctAnswers.length} components correct ({((item.evaluation?.score ?? 0) * 100).toFixed(1)}% credit)</p>}<p className="mt-2 leading-7">{item.question.explanation}</p>{item.question.learnReference && <a className="mt-3 inline-block font-bold text-blue-700 underline" href={item.question.learnReference.url} target="_blank" rel="noreferrer">{item.question.learnReference.title} ↗</a>}</div>}
         {error && <p className="bad mt-4" role="alert">{error}</p>}
-        <div className="mt-7 flex flex-wrap justify-between gap-3"><button className="btn" disabled={position === 0} onClick={() => void navigate(position - 1)}>← Previous</button><div className="flex gap-2">{simulation.mode === "exam" && <button className="btn" onClick={toggleReview}>{item.forReview ? "Remove review flag" : "Mark for review"}</button>}{position < simulation.questions.length - 1 ? <button className="btn btn-primary" onClick={() => void navigate(position + 1)}>Next →</button> : simulation.mode === "exam" || allTrainingLocked ? <button className="btn btn-primary" disabled={busy} onClick={() => void submit()}>{simulation.mode === "exam" ? "Submit exam" : "View results"}</button> : null}</div></div>
+        <div className="mt-7 flex flex-wrap justify-between gap-3"><button className="btn" disabled={busy || position === 0} onClick={() => void navigate(position - 1)}>← Previous</button><div className="flex gap-2">{simulation.mode === "exam" && <button className="btn" disabled={busy} onClick={toggleReview}>{item.forReview ? "Remove review flag" : "Mark for review"}</button>}{position < simulation.questions.length - 1 ? <button className="btn btn-primary" disabled={busy} onClick={() => void navigate(position + 1)}>Next →</button> : simulation.mode === "exam" || allTrainingLocked ? <button className="btn btn-primary" disabled={busy} onClick={() => void submit()}>{simulation.mode === "exam" ? "Submit exam" : "View results"}</button> : null}</div></div>
       </section>
-      <aside className="card h-fit p-5"><h2 className="font-extrabold">Question navigator</h2><div className="mt-4 grid grid-cols-5 gap-2">{simulation.questions.map((question, index) => <button aria-label={`Question ${index + 1}${question.forReview ? ", marked for review" : ""}`} className={`relative aspect-square rounded-lg border text-sm font-bold ${index === position ? "border-blue-600 bg-blue-600 text-white" : question.selectedAnswers.length ? "border-green-300 bg-green-50" : "border-slate-200 bg-white"}`} onClick={() => void navigate(index)} key={index}>{index + 1}{question.forReview && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" />}</button>)}</div><div className="muted mt-4 space-y-1 text-xs"><div><span className="inline-block h-2.5 w-2.5 rounded bg-green-100" /> Answered: {simulation.questions.filter((q) => q.selectedAnswers.length).length}</div><div>○ Unanswered: {simulation.questions.filter((q) => !q.selectedAnswers.length).length}</div>{simulation.mode === "exam" && <div><span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" /> For review: {simulation.questions.filter((q) => q.forReview).length}</div>}</div>{simulation.mode === "exam" && <button disabled={busy} className="btn mt-5 w-full" onClick={() => void submit()}>Submit exam</button>}</aside>
+      <aside className="card h-fit p-5"><h2 className="font-extrabold">Question navigator</h2><div className="mt-4 grid grid-cols-5 gap-2">{simulation.questions.map((question, index) => <button disabled={busy} aria-label={`Question ${index + 1}${question.forReview ? ", marked for review" : ""}`} className={`relative aspect-square rounded-lg border text-sm font-bold ${index === position ? "border-blue-600 bg-blue-600 text-white" : question.selectedAnswers.length ? "border-green-300 bg-green-50" : "border-slate-200 bg-white"}`} onClick={() => void navigate(index)} key={index}>{index + 1}{question.forReview && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" />}</button>)}</div><div className="muted mt-4 space-y-1 text-xs"><div><span className="inline-block h-2.5 w-2.5 rounded bg-green-100" /> Answered: {simulation.questions.filter((q) => q.selectedAnswers.length).length}</div><div>○ Unanswered: {simulation.questions.filter((q) => !q.selectedAnswers.length).length}</div>{simulation.mode === "exam" && <div><span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" /> For review: {simulation.questions.filter((q) => q.forReview).length}</div>}</div>{simulation.mode === "exam" && <button disabled={busy} className="btn mt-5 w-full" onClick={() => void submit()}>Submit exam</button>}</aside>
     </div>
   </div>;
 }

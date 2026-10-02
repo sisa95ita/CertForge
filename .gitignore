@@ -9,3 +9,4 @@ data/*.sqlite
 data/*.sqlite-*
 *.log
 *.tsbuildinfo
+questions/

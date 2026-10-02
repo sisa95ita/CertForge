@@ -99,19 +99,28 @@ CREATE INDEX IF NOT EXISTS idx_questions_topic ON questions(topic);
 CREATE INDEX IF NOT EXISTS idx_simulations_status ON simulations(status, created_at);
 `;
 
+export function migrateDatabase(db: CertForgeDatabase): void {
+  const version = db.pragma("user_version", { simple: true }) as number;
+  if (version > 2) throw new Error(`Database schema version ${version} is newer than this CertForge build supports`);
+  db.transaction(() => {
+    if (version < 1) db.exec(migrationV1);
+    if (version < 2) {
+      db.exec(`
+        ALTER TABLE simulations ADD COLUMN retried_from_simulation_id TEXT REFERENCES simulations(id);
+        ALTER TABLE simulation_questions ADD COLUMN score_contribution REAL CHECK(score_contribution BETWEEN 0 AND 1);
+        UPDATE simulation_questions SET score_contribution = is_correct WHERE is_correct IS NOT NULL;
+      `);
+    }
+    db.pragma("user_version = 2");
+  })();
+}
+
 function openDatabase(filename: string): CertForgeDatabase {
   if (filename !== ":memory:") fs.mkdirSync(path.dirname(filename), { recursive: true });
   const db = new Database(filename);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  const version = db.pragma("user_version", { simple: true }) as number;
-  if (version > 1) throw new Error(`Database schema version ${version} is newer than this CertForge build supports`);
-  if (version < 1) {
-    db.transaction(() => {
-      db.exec(migrationV1);
-      db.pragma("user_version = 1");
-    })();
-  }
+  migrateDatabase(db);
   return db;
 }
 

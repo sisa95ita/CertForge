@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CertForgeDatabase } from "./db";
-import { isCorrectAnswer } from "./evaluation";
-import { selectQuestions, type SelectableQuestion } from "./selection";
+import { evaluateAnswer, evaluationFromScore } from "./evaluation";
+import { selectQuestions, shuffled, type SelectableQuestion } from "./selection";
 import type { SimulationMode, SimulationView, SnapshotQuestion } from "./types";
 
 export const createSimulationSchema = z.object({
@@ -48,7 +48,7 @@ function getPool(db: CertForgeDatabase, input: Pick<CreateSimulationInput, "bank
   );
 }
 
-function snapshotQuestion(db: CertForgeDatabase, row: PoolRow): SnapshotQuestion {
+function snapshotQuestion(db: CertForgeDatabase, row: PoolRow, random: () => number): SnapshotQuestion {
   const answers = db.prepare(`SELECT option_id AS id, text FROM question_options WHERE bank_id = ? AND bank_version = ? AND question_id = ? ORDER BY display_order`)
     .all(row.bankId, row.bankVersion, row.questionId) as { id: string; text: string }[];
   return {
@@ -60,17 +60,17 @@ function snapshotQuestion(db: CertForgeDatabase, row: PoolRow): SnapshotQuestion
     difficulty: row.difficulty,
     type: row.type,
     question: row.text,
-    answers,
+    answers: shuffled(answers, random),
     correctAnswers: JSON.parse(row.correctAnswersJson) as string[],
     explanation: row.explanation,
     ...(row.referenceTitle && row.referenceUrl ? { learnReference: { title: row.referenceTitle, url: row.referenceUrl } } : {}),
   };
 }
 
-export function createSimulation(db: CertForgeDatabase, rawInput: unknown): string {
+export function createSimulation(db: CertForgeDatabase, rawInput: unknown, random: () => number = Math.random): string {
   const input = createSimulationSchema.parse(rawInput);
   const pool = getPool(db, input);
-  const selected = selectQuestions(pool, input.questionCount);
+  const selected = selectQuestions(pool, input.questionCount, random);
   const id = randomUUID();
   const now = new Date().toISOString();
   const durationSeconds = input.mode === "exam" ? (input.durationMinutes ?? Math.max(5, Math.ceil(input.questionCount * 1.5))) * 60 : null;
@@ -79,17 +79,40 @@ export function createSimulation(db: CertForgeDatabase, rawInput: unknown): stri
     db.prepare(`INSERT INTO simulations (id, mode, status, created_at, started_at, duration_limit_seconds, current_position, certification_codes, filters_json) VALUES (?, ?, 'in-progress', ?, ?, ?, 0, ?, ?)`)
       .run(id, input.mode, now, now, durationSeconds, JSON.stringify(certifications), JSON.stringify(input));
     const insert = db.prepare(`INSERT INTO simulation_questions (simulation_id, position, source_bank_id, source_bank_version, source_question_id, snapshot_json) VALUES (?, ?, ?, ?, ?, ?)`);
-    selected.forEach((question, position) => insert.run(id, position, question.bankId, question.bankVersion, question.questionId, JSON.stringify(snapshotQuestion(db, question))));
+    selected.forEach((question, position) => insert.run(id, position, question.bankId, question.bankVersion, question.questionId, JSON.stringify(snapshotQuestion(db, question, random))));
   });
   write();
   return id;
 }
 
+export function retrySimulation(db: CertForgeDatabase, originalId: string, random: () => number = Math.random): string {
+  const original = db.prepare("SELECT * FROM simulations WHERE id = ?").get(originalId) as (SimulationRow & { certification_codes: string; filters_json: string }) | undefined;
+  if (!original) throw new Error("Simulation not found");
+  if (original.status !== "completed") throw new Error("Only completed simulations can be retried");
+  const questions = db.prepare("SELECT source_bank_id, source_bank_version, source_question_id, snapshot_json FROM simulation_questions WHERE simulation_id = ? ORDER BY position").all(originalId) as {
+    source_bank_id: string; source_bank_version: number; source_question_id: string; snapshot_json: string;
+  }[];
+  if (!questions.length) throw new Error("Simulation has no questions");
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO simulations (id, mode, status, created_at, started_at, duration_limit_seconds, current_position, certification_codes, filters_json, retried_from_simulation_id) VALUES (?, ?, 'in-progress', ?, ?, ?, 0, ?, ?, ?)`)
+      .run(id, original.mode, now, now, original.duration_limit_seconds, original.certification_codes, original.filters_json, originalId);
+    const insert = db.prepare(`INSERT INTO simulation_questions (simulation_id, position, source_bank_id, source_bank_version, source_question_id, snapshot_json) VALUES (?, ?, ?, ?, ?, ?)`);
+    shuffled(questions, random).forEach((row, position) => {
+      const snapshot = JSON.parse(row.snapshot_json) as SnapshotQuestion;
+      snapshot.answers = shuffled(snapshot.answers, random);
+      insert.run(id, position, row.source_bank_id, row.source_bank_version, row.source_question_id, JSON.stringify(snapshot));
+    });
+  })();
+  return id;
+}
+
 interface SimulationRow {
   id: string; mode: SimulationMode; status: "in-progress" | "completed"; created_at: string; started_at: string;
-  completed_at: string | null; duration_limit_seconds: number | null; current_position: number;
+  completed_at: string | null; duration_limit_seconds: number | null; current_position: number; retried_from_simulation_id: string | null;
 }
-interface QuestionRow { position: number; snapshot_json: string; is_locked: number; is_correct: number | null; for_review: number }
+interface QuestionRow { position: number; snapshot_json: string; is_locked: number; is_correct: number | null; score_contribution: number | null; for_review: number }
 
 function hasExpired(row: SimulationRow): boolean {
   return row.mode === "exam" && row.status === "in-progress" && row.duration_limit_seconds !== null && Date.now() >= new Date(row.started_at).getTime() + row.duration_limit_seconds * 1000;
@@ -102,15 +125,16 @@ export function getSimulation(db: CertForgeDatabase, id: string): SimulationView
     submitSimulation(db, id);
     row = db.prepare("SELECT * FROM simulations WHERE id = ?").get(id) as SimulationRow;
   }
-  const questionRows = db.prepare("SELECT position, snapshot_json, is_locked, is_correct, for_review FROM simulation_questions WHERE simulation_id = ? ORDER BY position").all(id) as QuestionRow[];
+  const questionRows = db.prepare("SELECT position, snapshot_json, is_locked, is_correct, score_contribution, for_review FROM simulation_questions WHERE simulation_id = ? ORDER BY position").all(id) as QuestionRow[];
   const answerRows = db.prepare("SELECT position, option_id FROM simulation_answers WHERE simulation_id = ? ORDER BY option_id").all(id) as { position: number; option_id: string }[];
   return {
     id: row.id, mode: row.mode, status: row.status, createdAt: row.created_at, startedAt: row.started_at,
-    completedAt: row.completed_at, durationLimitSeconds: row.duration_limit_seconds, currentPosition: row.current_position,
+    completedAt: row.completed_at, durationLimitSeconds: row.duration_limit_seconds, currentPosition: row.current_position, retriedFromSimulationId: row.retried_from_simulation_id,
     questions: questionRows.map((question) => ({
       position: question.position,
       question: JSON.parse(question.snapshot_json) as SnapshotQuestion,
       selectedAnswers: answerRows.filter((answer) => answer.position === question.position).map((answer) => answer.option_id),
+      evaluation: question.score_contribution === null ? null : evaluationFromScore(question.score_contribution),
       locked: Boolean(question.is_locked), correct: question.is_correct === null ? null : Boolean(question.is_correct), forReview: Boolean(question.for_review),
     })),
   };
@@ -134,6 +158,7 @@ export function saveAnswers(db: CertForgeDatabase, id: string, position: number,
   if (answers.some((answer) => !valid.has(answer))) throw new Error("An answer option is invalid");
   if (snapshot.type === "single-choice" && answers.length > 1) throw new Error("Select only one answer");
   const unique = [...new Set(answers)];
+  if (snapshot.type === "multiple-choice" && unique.length > snapshot.correctAnswers.length) throw new Error(`Select at most ${snapshot.correctAnswers.length} answers`);
   const now = new Date().toISOString();
   db.transaction(() => {
     db.prepare("DELETE FROM simulation_answers WHERE simulation_id = ? AND position = ?").run(id, position);
@@ -157,7 +182,7 @@ export function setReviewFlag(db: CertForgeDatabase, id: string, position: numbe
   if (!result.changes) throw new Error("Question not found");
 }
 
-export function confirmTrainingAnswer(db: CertForgeDatabase, id: string, position: number): boolean {
+export function confirmTrainingAnswer(db: CertForgeDatabase, id: string, position: number): import("./types").EvaluationResult {
   const simulation = assertInProgress(db, id);
   if (simulation.mode !== "training") throw new Error("Answers are confirmed only in training mode");
   const question = db.prepare("SELECT snapshot_json, is_locked FROM simulation_questions WHERE simulation_id = ? AND position = ?").get(id, position) as { snapshot_json: string; is_locked: number } | undefined;
@@ -166,27 +191,30 @@ export function confirmTrainingAnswer(db: CertForgeDatabase, id: string, positio
   const answers = db.prepare("SELECT option_id FROM simulation_answers WHERE simulation_id = ? AND position = ?").all(id, position) as { option_id: string }[];
   if (!answers.length) throw new Error("Select at least one answer before confirming");
   const snapshot = JSON.parse(question.snapshot_json) as SnapshotQuestion;
-  const correct = isCorrectAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers);
-  db.prepare("UPDATE simulation_questions SET is_locked = 1, is_correct = ? WHERE simulation_id = ? AND position = ?").run(correct ? 1 : 0, id, position);
-  return correct;
+  if (answers.length > snapshot.correctAnswers.length) throw new Error(`Select at most ${snapshot.correctAnswers.length} answers`);
+  const evaluation = evaluateAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers, snapshot.type);
+  db.prepare("UPDATE simulation_questions SET is_locked = 1, is_correct = ?, score_contribution = ? WHERE simulation_id = ? AND position = ?").run(evaluation.status === "correct" ? 1 : 0, evaluation.score, id, position);
+  return evaluation;
 }
 
 export function submitSimulation(db: CertForgeDatabase, id: string): void {
   const simulation = db.prepare("SELECT * FROM simulations WHERE id = ?").get(id) as SimulationRow | undefined;
   if (!simulation) throw new Error("Simulation not found");
   if (simulation.status === "completed") return;
-  const questions = db.prepare("SELECT position, snapshot_json FROM simulation_questions WHERE simulation_id = ?").all(id) as { position: number; snapshot_json: string }[];
-  let correctCount = 0;
+  const questions = db.prepare("SELECT position, snapshot_json, score_contribution FROM simulation_questions WHERE simulation_id = ?").all(id) as { position: number; snapshot_json: string; score_contribution: number | null }[];
+  let earnedCredit = 0;
   db.transaction(() => {
-    const update = db.prepare("UPDATE simulation_questions SET is_locked = 1, is_correct = ? WHERE simulation_id = ? AND position = ?");
+    const update = db.prepare("UPDATE simulation_questions SET is_locked = 1, is_correct = ?, score_contribution = ? WHERE simulation_id = ? AND position = ?");
     for (const row of questions) {
       const snapshot = JSON.parse(row.snapshot_json) as SnapshotQuestion;
       const answers = db.prepare("SELECT option_id FROM simulation_answers WHERE simulation_id = ? AND position = ?").all(id, row.position) as { option_id: string }[];
-      const correct = isCorrectAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers);
-      if (correct) correctCount++;
-      update.run(correct ? 1 : 0, id, row.position);
+      const evaluation = row.score_contribution === null
+        ? evaluateAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers, snapshot.type)
+        : evaluationFromScore(row.score_contribution);
+      earnedCredit += evaluation.score;
+      update.run(evaluation.status === "correct" ? 1 : 0, evaluation.score, id, row.position);
     }
-    const score = questions.length ? (correctCount / questions.length) * 100 : 0;
+    const score = questions.length ? (earnedCredit / questions.length) * 100 : 0;
     db.prepare("UPDATE simulations SET status = 'completed', completed_at = ?, score_percent = ? WHERE id = ?").run(new Date().toISOString(), score, id);
   })();
 }

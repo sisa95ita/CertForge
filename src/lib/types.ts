@@ -1,3 +1,8 @@
+export interface EvaluationResult {
+  status: "correct" | "partial" | "incorrect";
+  score: number;
+}
+
 export type QuestionType = "single-choice" | "multiple-choice";
 export type SimulationMode = "training" | "exam";
 
@@ -22,6 +27,7 @@ export interface SimulationQuestionView {
   selectedAnswers: string[];
   locked: boolean;
   correct: boolean | null;
+  evaluation: EvaluationResult | null;
   forReview: boolean;
 }
 
@@ -34,5 +40,6 @@ export interface SimulationView {
   completedAt: string | null;
   durationLimitSeconds: number | null;
   currentPosition: number;
+  retriedFromSimulationId: string | null;
   questions: SimulationQuestionView[];
 }

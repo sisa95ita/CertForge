@@ -27,15 +27,16 @@ export function progressOverview(db: CertForgeDatabase) {
     const matching = items.filter((item) => item.mode === mode);
     return { mode, count: matching.length, average: matching.length ? matching.reduce((sum, item) => sum + (item.scorePercent ?? 0), 0) / matching.length : 0 };
   });
-  const detailRows = db.prepare(`SELECT q.snapshot_json AS snapshot, q.is_correct AS isCorrect FROM simulation_questions q JOIN simulations s ON s.id = q.simulation_id WHERE s.status = 'completed'`).all() as { snapshot: string; isCorrect: number }[];
+  const detailRows = db.prepare(`SELECT q.snapshot_json AS snapshot, q.is_correct AS isCorrect, q.score_contribution AS credit FROM simulation_questions q JOIN simulations s ON s.id = q.simulation_id WHERE s.status = 'completed'`).all() as { snapshot: string; isCorrect: number; credit: number | null }[];
   function grouped(field: "domain" | "topic") {
-    const values = new Map<string, { correct: number; total: number }>();
+    const values = new Map<string, { correct: number; credit: number; total: number }>();
     for (const row of detailRows) {
       const name = (JSON.parse(row.snapshot) as SnapshotQuestion)[field];
-      const value = values.get(name) ?? { correct: 0, total: 0 };
-      value.total++; value.correct += row.isCorrect ? 1 : 0; values.set(name, value);
+      const value = values.get(name) ?? { correct: 0, credit: 0, total: 0 };
+      value.total++; value.correct += row.isCorrect ? 1 : 0; value.credit += row.credit ?? (row.isCorrect ? 1 : 0); values.set(name, value);
     }
-    return [...values.entries()].map(([name, value]) => ({ name, ...value, percent: value.correct / value.total * 100 })).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+    return [...values.entries()].map(([name, value]) => ({ name, ...value, percent: value.credit / value.total * 100 })).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
   }
-  return { average, completed: items.length, recent: items.slice(0, 5), byMode, byDomain: grouped("domain"), byTopic: grouped("topic") };
+  const recentAverage = items.length ? items.slice(0, 5).reduce((sum, item) => sum + (item.scorePercent ?? 0), 0) / Math.min(items.length, 5) : 0;
+  return { average, recentAverage, completed: items.length, recent: items.slice(0, 5), byMode, byDomain: grouped("domain"), byTopic: grouped("topic") };
 }

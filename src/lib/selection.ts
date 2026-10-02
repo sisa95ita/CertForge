@@ -5,7 +5,7 @@ export interface SelectableQuestion {
   domain: string;
 }
 
-function shuffled<T>(items: readonly T[], random: () => number): T[] {
+export function shuffled<T>(items: readonly T[], random: () => number): T[] {
   const result = [...items];
   for (let index = result.length - 1; index > 0; index--) {
     const swap = Math.floor(random() * (index + 1));
