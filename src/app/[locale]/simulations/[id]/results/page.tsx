@@ -8,6 +8,7 @@ import { RetryButton } from "../../retry-button";
 import { getDb } from "@/lib/db";
 import { getSimulation } from "@/lib/simulation-service";
 import { simulationStatistics } from "@/lib/statistics";
+import { answerLabel } from "@/lib/answer-label";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,10 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
     <div className="mt-7 grid gap-4 md:grid-cols-2">{await Breakdown({title: t("byDomain"), items: stats.byDomain})}{await Breakdown({title: t("byTopic"), items: stats.byTopic})}</div>
     <section className="mt-10"><h2 className="text-2xl font-black">{t("review")}</h2><div className="mt-4 space-y-4">{simulation.questions.map((item) => {
       const partial = item.evaluation?.status === "partial";
-      const answerText = (ids: string[]) => ids.length ? ids.map((id) => item.question.answers.find((option) => option.id === id)?.text ?? id).join("; ") : t("noAnswer");
+      const answerText = (ids: string[]) => ids.length ? ids.map((id) => {
+        const index = item.question.answers.findIndex((option) => option.id === id);
+        return index < 0 ? t("noAnswer") : `${answerLabel(index)}. ${item.question.answers[index].text}`;
+      }).join("; ") : t("noAnswer");
       return <article className={`card border-l-4 p-6 ${item.correct ? "border-l-green-500" : partial ? "border-l-amber-500" : "border-l-red-500"}`} key={item.position}><div className="flex flex-wrap items-center justify-between gap-2"><span className={`font-extrabold ${item.correct ? "good" : partial ? "text-amber-700" : "bad"}`}>{c(item.correct ? "correct" : partial ? "partial" : "incorrect")}</span><span className="muted text-sm">{q("questionLabel", {position: f.number(item.position + 1)})}</span></div>{partial && <p className="mt-2 text-sm text-amber-800">{c("components", {correct: f.number(item.selectedAnswers.filter((id) => item.question.correctAnswers.includes(id)).length), total: f.number(item.question.correctAnswers.length), percent: f.percent((item.evaluation?.score ?? 0) * 100)})}</p>}<h3 className="mt-3 text-lg font-extrabold leading-7">{item.question.question}</h3><dl className="mt-4 grid gap-3 text-sm"><div><dt className="font-bold">{t("yourAnswer")}</dt><dd className="muted mt-1">{item.selectedAnswers.length ? <ul className="space-y-1">{item.selectedAnswers.map((id) => <li key={id}>{answerText([id])} <span className={item.question.correctAnswers.includes(id) ? "good font-bold" : "bad font-bold"}>({t(item.question.correctAnswers.includes(id) ? "correctSelection" : "incorrectSelection")})</span></li>)}</ul> : t("noAnswer")}</dd></div><div><dt className="font-bold">{t("correctAnswer")}</dt><dd className="muted mt-1">{answerText(item.question.correctAnswers)}</dd></div></dl><div className="mt-4 rounded-lg bg-slate-50 p-4 leading-7">{item.question.explanation}</div><div className="muted mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs"><span>{t("domain", {value: item.question.domain})}</span><span>{t("topic", {value: item.question.topic})}</span><span className="capitalize">{t("difficulty", {value: item.question.difficulty})}</span><span>{t("bank", {value: item.question.bankTitle})}</span></div>{item.question.learnReference && <a className="mt-4 inline-block font-bold text-blue-700 underline" href={item.question.learnReference.url} target="_blank" rel="noreferrer">{item.question.learnReference.title} ↗</a>}</article>;
     })}</div></section>
   </div>;

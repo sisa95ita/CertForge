@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement, type ReactNode } from "react";
 import { NextIntlClientProvider, createTranslator } from "next-intl";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import en from "../../../messages/en.json";
 import itMessages from "../../../messages/it.json";
 import { LanguageSwitcher } from "@/app/[locale]/language-switcher";
@@ -17,7 +17,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as database from "../db";
 import { importQuestionBank } from "../import-service";
-import { createSimulation, getSimulation, saveAnswers, confirmTrainingAnswer, submitSimulation } from "../simulation-service";
+import { createSimulation, getSimulation, retrySimulation, saveAnswers, confirmTrainingAnswer, submitSimulation } from "../simulation-service";
 import { testBank } from "./fixtures";
 import { NewSimulationForm } from "@/app/[locale]/simulations/new/new-simulation-form";
 import { SimulationRunner } from "@/app/[locale]/simulations/[id]/simulation-runner";
@@ -215,5 +215,173 @@ describe("CertForge localization", () => {
     expect(presentation("it").percent(12.5)).toBe("12,5%");
     expect(presentation("en").percent(12.5)).toBe("12.5%");
     expect(presentation("it").duration(65)).toContain("min");
+  });
+});
+
+function labeledSimulation(mode: "training" | "exam", type: "single-choice" | "multiple-choice", opaque = false) {
+  const db = database.createTestDb(); databases.push(db);
+  vi.spyOn(database, "getDb").mockReturnValue(db);
+  const ids = opaque
+    ? { a: "answer-x", b: "foo", c: "opaque-answer", d: "option-42" }
+    : { a: "a", b: "b", c: "c", d: "d" };
+  const options = type === "single-choice"
+    ? [{ id: ids.d, text: "Four" }, { id: ids.b, text: "Two" }, { id: ids.a, text: "One" }, { id: ids.c, text: "Three" }]
+    : [{ id: ids.c, text: "Three" }, { id: ids.a, text: "One" }, { id: ids.d, text: "Four" }, { id: ids.b, text: "Two" }];
+  const bank = testBank();
+  bank.questions = [{ ...bank.questions[0], type, answers: options, correctAnswers: type === "single-choice" ? [ids.a] : [ids.a, ids.b] }];
+  importQuestionBank(db, bank);
+  const id = createSimulation(db, { mode, questionCount: 1 }, () => 0.999);
+  return { db, id, ids };
+}
+
+describe("answer labels stay separate from stable IDs", () => {
+  const cases = (["training", "exam"] as const).flatMap((mode) =>
+    (["single-choice", "multiple-choice"] as const).flatMap((type) =>
+      [false, true].map((opaque) => ({ mode, type, opaque }))));
+
+  it.each(cases)("renders position labels and saves stable IDs in $mode $type (opaque=$opaque)", async ({ mode, type, opaque }) => {
+    const { db, id, ids } = labeledSimulation(mode, type, opaque);
+    const initial = getSimulation(db, id)!;
+    const snapshot = db.prepare("SELECT snapshot_json FROM simulation_questions WHERE simulation_id = ?").get(id);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string) as { action: string; answers: string[] };
+      if (body.action === "answers") saveAnswers(db, id, 0, body.answers);
+      else if (body.action === "confirm") confirmTrainingAnswer(db, id, 0);
+      else if (body.action === "submit") submitSimulation(db, id);
+      return { ok: true, json: async () => getSimulation(db, id)! };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(provider(createElement(SimulationRunner, { initial })));
+    const role = type === "single-choice" ? "radio" : "checkbox";
+    const expectedLabels = type === "single-choice"
+      ? ["A. Four", "B. Two", "C. One", "D. Three"]
+      : ["A. Three", "B. One", "C. Four", "D. Two"];
+    expect(screen.getAllByRole(role).map((input) => input.closest("label")!.querySelector("strong")!.textContent)).toEqual(["A.", "B.", "C.", "D."]);
+    for (const label of expectedLabels) expect(screen.getByRole(role, { name: label })).toBeTruthy();
+    if (opaque) for (const stableId of Object.values(ids)) expect(view.container.textContent).not.toContain(stableId);
+
+    const selectedLabels = type === "single-choice" ? ["C. One"] : ["B. One", "D. Two"];
+    const stableIds = type === "single-choice" ? [ids.a] : [ids.a, ids.b];
+    for (let index = 0; index < selectedLabels.length; index++) {
+      fireEvent.click(screen.getByRole(role, { name: selectedLabels[index] }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(index + 1));
+      await waitFor(() => expect((screen.getByRole(role, { name: selectedLabels[index] }) as HTMLInputElement).disabled).toBe(false));
+      const sent = JSON.parse(fetchMock.mock.calls[index][1]!.body as string);
+      expect(sent).toEqual({ action: "answers", position: 0, answers: stableIds.slice(0, index + 1) });
+    }
+    expect(getSimulation(db, id)!.questions[0].selectedAnswers).toEqual([...stableIds].sort());
+    expect(db.prepare("SELECT option_id FROM simulation_answers WHERE simulation_id = ? ORDER BY option_id").all(id))
+      .toEqual([...stableIds].sort().map((option_id) => ({ option_id })));
+
+    if (mode === "training") {
+      fireEvent.click(screen.getByRole("button", { name: "Confirm answer" }));
+      await waitFor(() => expect(screen.getAllByText("Selected correctly")).toHaveLength(stableIds.length));
+      expect(getSimulation(db, id)!.questions[0].evaluation).toEqual({ status: "correct", score: 1 });
+      for (const label of selectedLabels) {
+        expect(screen.getByRole(role, { name: label + " Selected correctly" })).toBeTruthy();
+      }
+      await waitFor(() => expect((screen.getByRole("button", { name: "View results" }) as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(screen.getByRole("button", { name: "View results" }));
+    } else {
+      fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[0]);
+    }
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/en/simulations/" + id + "/results"));
+    const completed = getSimulation(db, id)!;
+    expect(completed.questions[0].evaluation).toEqual({ status: "correct", score: 1 });
+    expect(completed.questions[0].question).toEqual(initial.questions[0].question);
+    expect(db.prepare("SELECT snapshot_json FROM simulation_questions WHERE simulation_id = ?").get(id)).toEqual(snapshot);
+    cleanup();
+
+    render(provider(await ResultsPage({ params: Promise.resolve({ id, locale: "en" }) })));
+    const review = document.querySelector("article")!;
+    const selected = within(review).getByText("Your answer").nextElementSibling!;
+    const correct = within(review).getByText("Correct answer").nextElementSibling!;
+    for (const label of selectedLabels) {
+      expect(selected.textContent).toContain(label);
+      expect(correct.textContent).toContain(label);
+    }
+    expect(screen.getByRole("heading", { name: "100.0%" })).toBeTruthy();
+  });
+
+
+  it("uses snapshot labels for correct, incorrect and partial Training feedback", async () => {
+    const { db, id } = labeledSimulation("training", "multiple-choice");
+    saveAnswers(db, id, 0, ["a", "d"]);
+    confirmTrainingAnswer(db, id, 0);
+    const initial = getSimulation(db, id)!;
+    expect(initial.questions[0].evaluation).toEqual({ status: "partial", score: 0.5 });
+    render(provider(createElement(SimulationRunner, { initial })));
+    expect(screen.getByRole("checkbox", { name: "B. One Selected correctly" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "C. Four Selected incorrectly" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "D. Two Correct answer" })).toBeTruthy();
+    expect(screen.getByText("1 / 2 components correct (50.0% credit)")).toBeTruthy();
+    cleanup(); submitSimulation(db, id);
+    render(provider(await ResultsPage({ params: Promise.resolve({ id, locale: "en" }) })));
+    const review = document.querySelector("article")!;
+    expect(within(review).getByText("Your answer").nextElementSibling!.textContent)
+      .toBe("B. One (Correct selection)C. Four (Incorrect selection)");
+    expect(within(review).getByText("Correct answer").nextElementSibling!.textContent)
+      .toBe("B. One; D. Two");
+  });
+
+  it.each(["en", "it"] as const)("reviews historical snapshot order in %s without writes or migration", async (locale) => {
+    navigation.locale = locale;
+    const { db, id } = labeledSimulation("exam", "single-choice", true);
+    saveAnswers(db, id, 0, ["answer-x"]); submitSimulation(db, id);
+    const before = getSimulation(db, id)!;
+    const rows = db.prepare("SELECT * FROM simulation_questions WHERE simulation_id = ?").all(id);
+    const changes = db.prepare("SELECT total_changes() AS count").get();
+    const version = db.pragma("user_version", { simple: true });
+    const history = markup(await SimulationsPage());
+    expect(history).toContain('href="/' + locale + '/simulations/' + id + '/results"');
+
+    render(provider(await ResultsPage({ params: Promise.resolve({ id, locale }) })));
+    const review = document.querySelector("article")!;
+    const yourAnswer = within(review).getByText(locale === "it" ? "La tua risposta" : "Your answer").nextElementSibling!;
+    const correctAnswer = within(review).getByText(locale === "it" ? "Risposta corretta" : "Correct answer").nextElementSibling!;
+    expect(yourAnswer.textContent).toContain("C. One");
+    expect(correctAnswer.textContent).toBe("C. One");
+    for (const stableId of ["answer-x", "foo", "opaque-answer", "option-42"]) expect(review.textContent).not.toContain(stableId);
+    expect(getSimulation(db, id)).toEqual(before);
+    expect(db.prepare("SELECT * FROM simulation_questions WHERE simulation_id = ?").all(id)).toEqual(rows);
+    expect(db.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+    expect(db.pragma("user_version", { simple: true })).toBe(version);
+  });
+
+  it.each(["training", "exam"] as const)("relabels a reshuffled %s retry and preserves correctness and the original snapshot", async (mode) => {
+    const { db, id } = labeledSimulation(mode, "multiple-choice");
+    saveAnswers(db, id, 0, ["a", "b"]);
+    if (mode === "training") confirmTrainingAnswer(db, id, 0);
+    submitSimulation(db, id);
+    const original = getSimulation(db, id)!;
+    const snapshot = db.prepare("SELECT snapshot_json FROM simulation_questions WHERE simulation_id = ?").get(id);
+    const retryId = retrySimulation(db, id, () => 0);
+    const retried = getSimulation(db, retryId)!;
+    expect(retried.questions[0].question.answers.map((option) => option.id)).toEqual(["a", "d", "b", "c"]);
+    expect(retried.questions[0].question.correctAnswers).toEqual(["a", "b"]);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string) as { answers: string[] };
+      saveAnswers(db, retryId, 0, body.answers);
+      return { ok: true, json: async () => getSimulation(db, retryId)! };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(provider(createElement(SimulationRunner, { initial: retried })));
+    expect(screen.getAllByRole("checkbox").map((input) => input.closest("label")!.querySelector("strong")!.textContent))
+      .toEqual(["A.", "B.", "C.", "D."]);
+    for (const label of ["A. One", "B. Four", "C. Two", "D. Three"]) expect(screen.getByRole("checkbox", { name: label })).toBeTruthy();
+    for (const label of ["A. One", "C. Two"]) {
+      fireEvent.click(screen.getByRole("checkbox", { name: label }));
+      await waitFor(() => expect((screen.getByRole("checkbox", { name: label }) as HTMLInputElement).disabled).toBe(false));
+    }
+    expect(getSimulation(db, retryId)!.questions[0].selectedAnswers).toEqual(["a", "b"]);
+    if (mode === "training") expect(confirmTrainingAnswer(db, retryId, 0)).toEqual({ status: "correct", score: 1 });
+    submitSimulation(db, retryId);
+    expect(getSimulation(db, retryId)!.questions[0].evaluation).toEqual({ status: "correct", score: 1 });
+    cleanup();
+    render(provider(await ResultsPage({ params: Promise.resolve({ id: retryId, locale: "en" }) })));
+    const correct = within(document.querySelector("article")!).getByText("Correct answer").nextElementSibling!;
+    expect(correct.textContent).toBe("A. One; C. Two");
+    expect(getSimulation(db, id)).toEqual(original);
+    expect(db.prepare("SELECT snapshot_json FROM simulation_questions WHERE simulation_id = ?").get(id)).toEqual(snapshot);
   });
 });
