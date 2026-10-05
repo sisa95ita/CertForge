@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDataSource } from "@/lib/db";
 import { getCatalog } from "@/lib/simulation-service";
 
 export const runtime = "nodejs";
-export function GET() {
-  try { return NextResponse.json(getCatalog(getDb())); }
+export async function GET() {
+  try { return NextResponse.json(await getCatalog(await getDataSource())); }
   catch { return NextResponse.json({ error: "Could not load question banks" }, { status: 500 }); }
 }

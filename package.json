@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate": "node --conditions=react-server --import tsx ./node_modules/typeorm/cli.js migration:run -d src/lib/persistence/cli-data-source.ts",
+    "db:migration:generate": "node --conditions=react-server --import tsx ./node_modules/typeorm/cli.js migration:generate -d src/lib/persistence/cli-data-source.ts",
+    "db:migration:revert": "node --conditions=react-server --import tsx ./node_modules/typeorm/cli.js migration:revert -d src/lib/persistence/cli-data-source.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.4.1",
@@ -16,6 +19,8 @@
     "next-intl": "^4.14.9",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "server-only": "^0.0.1",
+    "typeorm": "^1.1.1",
     "zod": "4.1.12"
   },
   "devDependencies": {
@@ -29,6 +34,7 @@
     "eslint-config-next": "16.3.7",
     "jsdom": "^30.1.1",
     "tailwindcss": "4.1.16",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   }

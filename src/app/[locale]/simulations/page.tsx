@@ -3,7 +3,7 @@ import { getLocale, getTranslations } from "next-intl/server";
 import { presentation } from "@/i18n/format";
 import { Breakdown } from "./breakdown";
 import { RetryButton } from "./retry-button";
-import { getDb } from "@/lib/db";
+import { getDataSource } from "@/lib/db";
 import { listSimulations, progressOverview } from "@/lib/history-service";
 
 export const dynamic = "force-dynamic";
@@ -15,11 +15,11 @@ export default async function SimulationsPage() {
   const h = await getTranslations("History");
   const p = await getTranslations("Progress");
   const f = presentation(await getLocale());
-  const db = getDb();
-  const simulations = listSimulations(db);
+  const db = await getDataSource();
+  const simulations = await listSimulations(db);
   const active = simulations.filter((item) => item.status === "in-progress");
   const history = simulations.filter((item) => item.status === "completed");
-  const overview = progressOverview(db);
+  const overview = await progressOverview(db);
   return <div>
     <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-3xl font-black tracking-tight">{t("title")}</h1><p className="muted mt-2">{t("description")}</p></div><Link className="btn btn-primary" href="/simulations/new">{n("title")}</Link></div>
 

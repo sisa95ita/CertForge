@@ -1,51 +1,95 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTestDb, migrateDatabase } from "../db";
-import { importQuestionBank } from "../import-service";
-import { createSimulation, getSimulation, retrySimulation, saveAnswers, submitSimulation } from "../simulation-service";
+import type { DataSource } from "typeorm";
+import { createTestDb } from "./test-db";
+import { createDataSource, initializeDatabase } from "../persistence/data-source";
+import { Baseline1791158400000 } from "../persistence/migrations/1791158400000-Baseline";
+import { createLegacyDatabase } from "./legacy-db";
+import { getCatalog, getSimulation, retrySimulation, saveAnswers, submitSimulation } from "../simulation-service";
 import { listSimulations, progressOverview } from "../history-service";
 import { simulationStatistics } from "../statistics";
-import { testBank } from "./fixtures";
-const databases: ReturnType<typeof createTestDb>[] = [];
-afterEach(() => { databases.splice(0).forEach((db) => db.close()); });
-function legacy(db: ReturnType<typeof createTestDb>) {
-  db.exec("ALTER TABLE simulation_questions DROP COLUMN score_contribution; ALTER TABLE simulations DROP COLUMN retried_from_simulation_id;");
-  db.pragma("user_version = 1");
+
+const databases: DataSource[] = [];
+const directories: string[] = [];
+afterEach(async () => {
+  await Promise.all(databases.splice(0).filter((db) => db.isInitialized).map((db) => db.destroy()));
+  directories.splice(0).forEach((dir) => fs.rmSync(dir, { recursive: true, force: true }));
+});
+function filename() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "certforge-migration-")); directories.push(dir);
+  return path.join(dir, "legacy.db");
 }
-describe("SQLite migration", () => {
-  it("preserves populated V1 banks, history, snapshots and binary scores; retries use fractional scores", () => {
-    const db = createTestDb(); databases.push(db); importQuestionBank(db, testBank());
-    const id = createSimulation(db, { mode: "exam", questionCount: 4 }, () => 0.999);
-    const p = getSimulation(db, id)!.questions.find((q) => q.question.type === "multiple-choice")!.position;
-    saveAnswers(db, id, p, ["a", "b"]); submitSimulation(db, id); legacy(db);
-    db.prepare("UPDATE simulations SET score_percent = 0 WHERE id = ?").run(id);
-    const banks = db.prepare("SELECT * FROM question_banks").all(), versions = db.prepare("SELECT * FROM question_bank_versions").all();
-    const snapshots = db.prepare("SELECT snapshot_json FROM simulation_questions ORDER BY position").all();
-    const answers = db.prepare("SELECT * FROM simulation_answers").all();
-    migrateDatabase(db);
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
-    expect(db.prepare("SELECT * FROM question_banks").all()).toEqual(banks);
-    expect(db.prepare("SELECT * FROM question_bank_versions").all()).toEqual(versions);
-    expect(db.prepare("SELECT snapshot_json FROM simulation_questions ORDER BY position").all()).toEqual(snapshots);
-    expect(db.prepare("SELECT * FROM simulation_answers").all()).toEqual(answers);
-    const historical = getSimulation(db, id)!;
-    expect(historical.questions[p].evaluation).toEqual({ status: "incorrect", score: 0 });
-    expect(simulationStatistics(historical).percent).toBe(0); expect(listSimulations(db)[0].scorePercent).toBe(0);
-    expect(progressOverview(db).average).toBe(0); migrateDatabase(db); expect(getSimulation(db, id)).toEqual(historical);
-    const retryId = retrySimulation(db, id, () => 0);
-    const retryPos = getSimulation(db, retryId)!.questions.find((q) => q.question.type === "multiple-choice")!.position;
-    saveAnswers(db, retryId, retryPos, ["a", "b"]); submitSimulation(db, retryId);
-    expect(getSimulation(db, retryId)!.questions[retryPos].evaluation).toEqual({ status: "partial", score: 0.5 });
-    expect(getSimulation(db, id)).toEqual(historical);
-    expect(db.pragma("foreign_key_check")).toEqual([]); expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+const tables = ["question_banks", "question_bank_versions", "questions", "question_options", "simulations", "simulation_questions", "simulation_answers"];
+
+describe("TypeORM migrations", () => {
+  it("retains the migration identity when the production bundler renames its class", async () => {
+    class M extends Baseline1791158400000 {}
+    const source = createDataSource(":memory:").setOptions({ migrations: [M] });
+    const db = await initializeDatabase(source); databases.push(db);
+    expect(await db.query("SELECT name FROM migrations")).toEqual([{ name: "Baseline1791158400000" }]);
+    expect(await db.runMigrations()).toEqual([]);
   });
-  it("preserves unevaluated active sessions", () => {
-    const db = createTestDb(); databases.push(db); importQuestionBank(db, testBank());
-    const id = createSimulation(db, { mode: "training", questionCount: 4 }); saveAnswers(db, id, 0, ["a"]);
-    const question = getSimulation(db, id)!.questions[0].question; legacy(db); migrateDatabase(db);
-    expect(getSimulation(db, id)!.questions[0]).toMatchObject({ question, selectedAnswers: ["a"], locked: false, evaluation: null });
+
+  it("creates the complete fresh schema with the real migrations and is idempotent", async () => {
+    const db = await createTestDb(); databases.push(db);
+    expect(db.options).toMatchObject({ type: "better-sqlite3", synchronize: false, enableWAL: true });
+    const actual = await db.query("SELECT name FROM sqlite_master WHERE type = 'table'") as { name: string }[];
+    expect(actual.map((t) => t.name)).toEqual(expect.arrayContaining([...tables, "migrations"]));
+    expect(await db.runMigrations()).toEqual([]);
+    expect(await db.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
+    const indexes = await db.query("SELECT name FROM sqlite_master WHERE type = 'index'") as { name: string }[];
+    expect(indexes.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_questions_domain", "idx_questions_topic", "idx_simulations_status"]));
   });
-  it("rejects databases from newer builds", () => {
-    const db = createTestDb(); databases.push(db); db.pragma("user_version = 3");
-    expect(() => migrateDatabase(db)).toThrow(/newer/); expect(db.pragma("user_version", { simple: true })).toBe(3);
+
+  it.each([1, 2] as const)("adopts populated pre-TypeORM V%s without recreating tables or changing historical data", async (version) => {
+    const file = filename();
+    const legacy = createLegacyDatabase(file, version);
+    const before = Object.fromEntries(tables.map((table) => [table, legacy.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+    const roots = legacy.prepare("SELECT name, rootpage FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
+    legacy.close();
+    const db = await initializeDatabase(createDataSource(file)); databases.push(db);
+    for (const table of tables) {
+      const rows = await db.query(`SELECT * FROM ${table} ORDER BY rowid`);
+      const comparable = version === 1 ? rows.map((row: Record<string, unknown>) => {
+        const copy = { ...row }; delete copy.score_contribution; delete copy.retried_from_simulation_id; return copy;
+      }) : rows;
+      expect(comparable).toEqual(before[table]);
+    }
+    const afterRoots = await db.query("SELECT name, rootpage FROM sqlite_master WHERE type = 'table' AND name != 'migrations' AND name != 'sqlite_sequence' ORDER BY name");
+    expect(afterRoots).toEqual(roots);
+    expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: version }]);
+    expect(await db.query("PRAGMA journal_mode")).toEqual([{ journal_mode: "wal" }]);
+    expect(await db.runMigrations()).toEqual([]);
+    const catalog = await getCatalog(db);
+    expect(catalog.banks[0]).toMatchObject({ version: 2, questionCount: 4 });
+    const historical = (await getSimulation(db, "complete-exam"))!;
+    expect(historical.questions[0].question.question).not.toContain("UPDATED");
+    expect(historical.questions[0].evaluation).toEqual(version === 1 ? { status: "incorrect", score: 0 } : { status: "partial", score: 0.5 });
+    expect(simulationStatistics(historical).percent).toBe(version === 1 ? 0 : 50);
+    expect((await listSimulations(db)).find((s) => s.id === "complete-exam")?.scorePercent).toBe(version === 1 ? 0 : 50);
+    expect((await progressOverview(db)).average).toBe(version === 1 ? 50 : 75);
+    for (const id of ["active-training", "active-exam"]) {
+      expect((await getSimulation(db, id))!.questions[0]).toMatchObject({ selectedAnswers: ["a", "b"], locked: false, correct: null, evaluation: null });
+    }
+    if (version === 2) expect(await getSimulation(db, "retry")).toMatchObject({ retriedFromSimulationId: "complete-exam" });
+    const retryId = await retrySimulation(db, "complete-exam", () => 0);
+    await saveAnswers(db, retryId, 0, ["a", "b"]); await submitSimulation(db, retryId);
+    expect((await getSimulation(db, retryId))!.questions[0].evaluation).toEqual({ status: "partial", score: 0.5 });
+    expect(await getSimulation(db, "complete-exam")).toEqual(historical);
+    expect(await db.query("PRAGMA foreign_key_check")).toEqual([]);
+    expect(await db.query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+  });
+
+  it("rejects a newer legacy schema without touching its data", async () => {
+    const file = filename(); const legacy = createLegacyDatabase(file, 2);
+    legacy.pragma("user_version = 3"); const banks = legacy.prepare("SELECT * FROM question_banks").all(); legacy.close();
+    const source = createDataSource(file);
+    await expect(initializeDatabase(source)).rejects.toThrow(/newer/);
+    expect(source.isInitialized).toBe(false);
+    const Database = (await import("better-sqlite3")).default; const raw = new Database(file);
+    try { expect(raw.prepare("SELECT * FROM question_banks").all()).toEqual(banks); expect(raw.pragma("user_version", { simple: true })).toBe(3); }
+    finally { raw.close(); }
   });
 });

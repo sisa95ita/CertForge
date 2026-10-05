@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getDataSource } from "@/lib/db";
 import { importQuestionBank, type ImportResult } from "@/lib/import-service";
 
 export const runtime = "nodejs";
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
           continue;
         }
         const value: unknown = JSON.parse(await file.text());
-        results.push(importQuestionBank(getDb(), value));
+        results.push(await importQuestionBank(await getDataSource(), value));
       } catch (error) {
         results.push({ status: "failed", title: file.name, errors: [error instanceof SyntaxError ? `Malformed JSON: ${error.message}` : "Could not read this file"] });
       }

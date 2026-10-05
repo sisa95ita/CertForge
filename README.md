@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The database schema is initialized automatically on first use.
+Open [http://localhost:3000](http://localhost:3000). Pending TypeORM migrations run automatically on first database use.
 
 For a production-style local run:
 
@@ -34,9 +34,19 @@ npm test
 
 ## Local database
 
-The default database is `data/certforge.db`. SQLite creates adjacent WAL/SHM files while the app is running. These files are ignored by Git.
+Persistence uses TypeORM repositories and QueryBuilder with SQLite's `better-sqlite3` driver, WAL mode, and foreign-key enforcement. The default file is `data/certforge.db`; set `CERTFORGE_DB_PATH` to use another location. The parent directory is created automatically. Adjacent WAL/SHM files are ignored by Git.
 
-To use another location, set `CERTFORGE_DB_PATH` before starting the app. To reset all local data, stop CertForge and delete `data/certforge.db` plus any `data/certforge.db-wal` and `data/certforge.db-shm` files. The next start creates an empty database.
+`synchronize: false` is intentional. Explicit TypeORM migrations run automatically on first use through a shared initialization promise; failures abort initialization. The baseline adopts existing version 1/2 databases in place, preserves historical data, and backfills version 1 binary score contributions. Existing `PRAGMA user_version` values are retained; TypeORM's `migrations` table tracks all future changes. No database deletion or manual SQL is required to upgrade.
+
+```bash
+npm run db:migrate
+npm run db:migration:generate -- src/lib/persistence/migrations/AddFeature
+npm run db:migration:revert
+```
+
+The CLI uses `tsx` and the same data source configuration as the app, with the server-only Node condition. Stop the app before CLI schema changes. Legacy SQLite constraints are unnamed, so generated output can include constraint-name changes and table rebuilds; review these and use explicit migrations to avoid unnecessary changes. Register each exported migration class in `src/lib/persistence/data-source.ts` so it is included in production bundles. Give each migration a stable `name` property ending in its timestamp, as in the baseline, to survive Next.js minification. Revert undoes the latest reversible migration; the adoption baseline refuses to revert because doing so would destroy local data. Pending reverted migrations run again on the next app start.
+
+To deliberately reset all local data, stop CertForge and delete the configured database plus its `-wal` and `-shm` files. The next start creates an empty database through the migrations. Tests use isolated in-memory data sources and the same migration files; legacy compatibility tests use a frozen pre-TypeORM fixture.
 
 ## Importing question banks
 
@@ -96,7 +106,7 @@ History lists individual completed attempts with **Review** and **Retry**. Retry
 
 Single-choice scoring remains binary. Multiple-choice questions allow at most the required number of selections and earn credit for each correctly selected component, without negative marking. Training evaluates only after confirmation. Overall, domain, and topic percentages use earned credit divided by question count.
 
-SQLite migrates automatically to schema version 2 without changing imported banks, historical snapshots, or previously recorded scores. Existing evaluated questions retain their original binary credit; new attempts use fractional credit.
+The TypeORM baseline preserves imported banks, historical snapshots, and previously recorded scores. Existing version 1 evaluated questions retain their original binary credit; new attempts use fractional credit.
 
 ## UI languages
 

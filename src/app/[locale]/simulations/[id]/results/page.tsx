@@ -5,7 +5,7 @@ import { Breakdown } from "../../breakdown";
 import { notFound } from "next/navigation";
 import { redirect } from "@/i18n/navigation";
 import { RetryButton } from "../../retry-button";
-import { getDb } from "@/lib/db";
+import { getDataSource } from "@/lib/db";
 import { getSimulation } from "@/lib/simulation-service";
 import { simulationStatistics } from "@/lib/statistics";
 import { answerLabel } from "@/lib/answer-label";
@@ -18,7 +18,7 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
   const c = await getTranslations("Common");
   const q = await getTranslations("Simulation");
   const f = presentation(await getLocale());
-  const simulation = getSimulation(getDb(), id);
+  const simulation = await getSimulation(await getDataSource(), id);
   if (!simulation) notFound();
   if (simulation.status !== "completed") redirect({ href: `/simulations/${id}`, locale });
   const stats = simulationStatistics(simulation);
