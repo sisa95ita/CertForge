@@ -97,3 +97,9 @@ History lists individual completed attempts with **Review** and **Retry**. Retry
 Single-choice scoring remains binary. Multiple-choice questions allow at most the required number of selections and earn credit for each correctly selected component, without negative marking. Training evaluates only after confirmation. Overall, domain, and topic percentages use earned credit divided by question count.
 
 SQLite migrates automatically to schema version 2 without changing imported banks, historical snapshots, or previously recorded scores. Existing evaluated questions retain their original binary credit; new attempts use fractional credit.
+
+## UI languages
+
+CertForge uses next-intl with Italian as the default UI language. `/` redirects to `/it`; English is available at `/en`. The header language switcher preserves the current route (including simulation IDs), query string and fragment. Existing page paths keep their names under `/it` and `/en`; API paths remain under `/api`.
+
+UI messages live in `messages/it.json` and `messages/en.json`. Question-bank text and metadata retain their imported language and are independent of the UI language. Locale changes do not write to the database or create simulations.
