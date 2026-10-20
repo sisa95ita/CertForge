@@ -23,6 +23,9 @@ import { createSimulation, getSimulation, retrySimulation, saveAnswers, confirmT
 import { testBank } from "./fixtures";
 import { NewSimulationForm } from "@/app/[locale]/simulations/new/new-simulation-form";
 import { SimulationRunner } from "@/app/[locale]/simulations/[id]/simulation-runner";
+import { setCurrentPosition } from "../simulation-service";
+import { v2Bank, matrixQuestion, completionQuestion } from "./v2-fixtures";
+import { matrixAnswerId } from "../question-answers";
 import ResultsPage from "@/app/[locale]/simulations/[id]/results/page";
 import SimulationsPage from "@/app/[locale]/simulations/page";
 const navigation = vi.hoisted(() => ({ locale: "en" as "en" | "it", pathname: "/en/simulations", push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn(), redirect: vi.fn() }));
@@ -420,3 +423,162 @@ describe("answer labels stay separate from stable IDs", () => {
         expect((await db.getRepository(SimulationQuestionEntity).findOne({ select: { snapshot_json: true }, where: { simulation_id: id } }))).toEqual(snapshot);
     });
 });
+
+async function v2Setup(mode: "training" | "exam", bank = v2Bank()) {
+    const db = await createTestDb(); databases.push(db);
+    await importQuestionBank(db, bank);
+    vi.spyOn(database, "getDataSource").mockResolvedValue(db);
+    const id = await createSimulation(db, { mode, questionCount: 2 }, () => 0.999);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string);
+        if (body.action === "answers") await saveAnswers(db, id, body.position, body.answers);
+        if (body.action === "confirm") await confirmTrainingAnswer(db, id, body.position);
+        if (body.action === "navigate") await setCurrentPosition(db, id, body.position);
+        if (body.action === "submit") await submitSimulation(db, id);
+        return { ok: true, json: async () => (await getSimulation(db, id))! };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { db, id, fetchMock };
+}
+describe("V2 question controls and review", () => {
+    it.each(["en", "it"] as const)("confirms all matrix rows together and locks localized training feedback in %s", async (locale) => {
+        navigation.locale = locale;
+        const { db, id, fetchMock } = await v2Setup("training");
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const yes = locale === "it" ? "Sì" : "Yes";
+        const no = "No";
+        const confirmName = locale === "it" ? "Conferma risposta" : "Confirm answer";
+        const confirm = screen.getByRole("button", { name: confirmName }) as HTMLButtonElement;
+        expect(confirm.disabled).toBe(true);
+        expect(screen.getAllByRole("group")).toHaveLength(3);
+        expect(document.body.textContent).not.toContain("First explanation");
+        const select = async (statement: string, answer: string, calls: number) => {
+            const group = screen.getByRole("group", { name: statement });
+            fireEvent.click(within(group).getByRole("radio", { name: answer }));
+            await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(calls));
+            await waitFor(() => expect((within(group).getByRole("radio", { name: answer }) as HTMLInputElement).disabled).toBe(false));
+        };
+        await select("Statement one", yes, 1);
+        await select("Statement two", no, 2);
+        expect(confirm.disabled).toBe(true);
+        expect(document.body.textContent).toContain(locale === "it" ? "Con risposta: 0" : "Answered: 0");
+        await select("Statement three", no, 3);
+        expect(confirm.disabled).toBe(false);
+        expect(document.body.textContent).toContain(locale === "it" ? "Con risposta: 1" : "Answered: 1");
+        fireEvent.click(confirm);
+        await screen.findByText(locale === "it" ? "Parzialmente corretta" : "Partially correct");
+        for (const radio of screen.getAllByRole("radio")) expect((radio as HTMLInputElement).disabled).toBe(true);
+        expect(document.body.textContent).toContain(locale === "it" ? "2 di 3 affermazioni corrette" : "2 of 3 statements correct");
+        expect(document.body.textContent).toContain(locale === "it" ? "0,67 / 1 punto" : "0.67 / 1 point");
+        for (const text of ["First explanation", "Second explanation", "Third explanation", "Overall explanation", "Matrix Learn"])
+            expect(document.body.textContent).toContain(text);
+        expect((await getSimulation(db, id))!.questions[0].evaluation).toEqual({ score: 2 / 3, status: "partial" });
+    });
+    it("persists partial exam rows, allows navigation and changes, and submits with rows unanswered", async () => {
+        const { db, id, fetchMock } = await v2Setup("exam");
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const group = screen.getByRole("group", { name: "Statement one" });
+        fireEvent.click(within(group).getByRole("radio", { name: "Yes" }));
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect((within(group).getByRole("radio", { name: "No" }) as HTMLInputElement).disabled).toBe(false));
+        fireEvent.click(within(group).getByRole("radio", { name: "No" }));
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect((screen.getByRole("button", { name: /Next/ }) as HTMLButtonElement).disabled).toBe(false));
+        expect(document.body.textContent).not.toContain("First explanation");
+        expect(document.body.textContent).not.toContain("Correct answer");
+        expect(document.body.textContent).toContain("Answered: 0");
+        fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+        await screen.findByRole("combobox");
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+        fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+        await screen.findByRole("group", { name: "Statement one" });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+        expect((within(screen.getByRole("group", { name: "Statement one" })).getByRole("radio", { name: "No" }) as HTMLInputElement).checked).toBe(true);
+        const warning = vi.spyOn(window, "confirm").mockReturnValue(true);
+        fireEvent.click(screen.getByRole("button", { name: "Submit exam" }));
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledWith(`/en/simulations/${id}/results`));
+        expect(warning).toHaveBeenCalledWith("2 questions are unanswered. Submit anyway?");
+        expect((await getSimulation(db, id))!.status).toBe("completed");
+    });
+    it.each(["en", "it"] as const)("renders an inline labeled dropdown using text and stable IDs and locks completion training in %s", async (locale) => {
+        navigation.locale = locale;
+        const { db, id, fetchMock } = await v2Setup("training");
+        await setCurrentPosition(db, id, 1);
+        const view = render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const select = screen.getByRole("combobox", { name: /Call client/ }) as HTMLSelectElement;
+        expect(select.labels).toHaveLength(1);
+        expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+            locale === "it" ? "Seleziona una risposta" : "Select an answer",
+            ...completionQuestion().answers.map((answer) => answer.text),
+        ]);
+        expect(view.container.textContent).not.toContain("{{blank}}");
+        expect(view.container.textContent).not.toContain("opaque-option-1");
+        const confirm = screen.getByRole("button", { name: locale === "it" ? "Conferma risposta" : "Confirm answer" }) as HTMLButtonElement;
+        expect(confirm.disabled).toBe(true);
+        fireEvent.change(select, { target: { value: "opaque-option-2" } });
+        await waitFor(() => expect(select.disabled).toBe(false));
+        expect(fetchMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ body: JSON.stringify({ action: "answers", position: 1, answers: ["opaque-option-2"] }) }));
+        fireEvent.click(confirm);
+        await screen.findByText(locale === "it" ? "Completamento corretto" : "Correct completion");
+        expect(select.disabled).toBe(true);
+        expect(document.body.textContent).toContain("Call client.responses.create(...) to respond.");
+        expect(document.body.textContent).toContain("Completion explanation");
+        expect(document.body.textContent).toContain("Completion Learn");
+        expect((await getSimulation(db, id))!.questions[1]).toMatchObject({ locked: true, evaluation: { score: 0, status: "incorrect" } });
+    });
+    it("allows completion exam changes with stable option order and hides feedback until results", async () => {
+        const { db, id } = await v2Setup("exam");
+        await setCurrentPosition(db, id, 1);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const select = screen.getByRole("combobox") as HTMLSelectElement;
+        const options = Array.from(select.options).map((option) => option.value);
+        fireEvent.change(select, { target: { value: "opaque-option-2" } });
+        await waitFor(() => expect(select.disabled).toBe(false));
+        fireEvent.change(select, { target: { value: "opaque-option-1" } });
+        await waitFor(() => expect(select.disabled).toBe(false));
+        expect(Array.from(select.options).map((option) => option.value)).toEqual(options);
+        expect(document.body.textContent).not.toContain("Completion explanation");
+        expect(document.body.textContent).not.toContain("Correct completion");
+        expect((await getSimulation(db, id))!.questions[1].evaluation).toBeNull();
+        cleanup();
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("opaque-option-1");
+        expect(Array.from((screen.getByRole("combobox") as HTMLSelectElement).options).map((option) => option.value)).toEqual(options);
+    });
+    it.each(["en", "it"] as const)("renders historical V2 review including unanswered rows and completed statements in %s", async (locale) => {
+        navigation.locale = locale;
+        const { db, id } = await v2Setup("exam");
+        await saveAnswers(db, id, 0, [matrixAnswerId(matrixQuestion().statements[0].id, "yes"), matrixAnswerId("s2", "no")]);
+        await saveAnswers(db, id, 1, ["opaque-option-2"]);
+        await submitSimulation(db, id);
+        await importQuestionBank(db, v2Bank(2, " UPDATED"));
+        const html = markup(await ResultsPage({ params: Promise.resolve({ id, locale }) }));
+        for (const text of ["First explanation", "Second explanation", "Third explanation", "Overall explanation", "Call client.models.list(...) to respond.", "Call client.responses.create(...) to respond.", "Matrix Learn", "Completion Learn"])
+            expect(html).toContain(text);
+        expect(html).toContain(locale === "it" ? "Nessuna risposta" : "No answer");
+        expect(html).toContain(locale === "it" ? "2 di 3 affermazioni corrette" : "2 of 3 statements correct");
+        expect(html).not.toContain("UPDATED");
+        expect(html).not.toContain("opaque-option-");
+        expect(html).not.toContain("{{blank}}");
+    });
+});
+
+    it("preserves replacement-like characters in selected and correct completion text", async () => {
+        const bank = v2Bank();
+        const literal = "$& + $' + $` + $$";
+        bank.questions[1] = {
+            ...completionQuestion(),
+            answers: [{ id: "opaque-option-1", text: literal }, ...completionQuestion().answers.slice(1)],
+        };
+        const { db, id } = await v2Setup("training", bank);
+        await setCurrentPosition(db, id, 1);
+        await saveAnswers(db, id, 1, ["opaque-option-1"]);
+        await confirmTrainingAnswer(db, id, 1);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const expected = "Call client." + literal + "(...) to respond.";
+        expect(screen.getByText(expected, { selector: "dd" })).toBeTruthy();
+        cleanup();
+        await submitSimulation(db, id);
+        render(provider(await ResultsPage({ params: Promise.resolve({ id, locale: "en" }) })));
+        expect(screen.getByRole("heading", { name: expected })).toBeTruthy();
+    });

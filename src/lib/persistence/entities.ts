@@ -1,5 +1,5 @@
 import { EntitySchema, type EntitySchemaColumnOptions } from "typeorm";
-import type { QuestionType, SimulationMode, SnapshotQuestion } from "../types";
+import type { QuestionType, SimulationMode, SnapshotQuestion, MatrixStatement } from "../types";
 import { integerBoolean, jsonText } from "./transformers";
 
 // Persistence properties deliberately match legacy column names. No generated identities,
@@ -17,7 +17,7 @@ export interface QuestionBankVersion {
 export interface Question {
   bank_id: string; bank_version: number; question_id: string; domain: string; topic: string;
   difficulty: string; type: QuestionType; text: string; explanation: string;
-  reference_title: string | null; reference_url: string | null; correct_answers_json: string[];
+  reference_title: string | null; reference_url: string | null; correct_answers_json: string[]; statements_json: MatrixStatement[] | null;
   version?: QuestionBankVersion; options?: QuestionOption[];
 }
 export interface QuestionOption {
@@ -62,13 +62,13 @@ export const QuestionBankVersionEntity = new EntitySchema<QuestionBankVersion>({
 });
 export const QuestionEntity = new EntitySchema<Question>({
   name: "Question", tableName: "questions",
-  columns: { ...bankKey, domain: text(), topic: text(), difficulty: text(), type: text(), text: text(), explanation: text(), reference_title: text(false, true), reference_url: text(false, true), correct_answers_json: { type: "text", transformer: jsonText } },
+  columns: { ...bankKey, domain: text(), topic: text(), difficulty: text(), type: text(), text: text(), explanation: text(), reference_title: text(false, true), reference_url: text(false, true), correct_answers_json: { type: "text", transformer: jsonText }, statements_json: { type: "text", nullable: true, transformer: jsonText } },
   relations: {
     version: { type: "many-to-one", target: "QuestionBankVersion", inverseSide: "questions", joinColumn: bankJoin, nullable: false, onDelete: "NO ACTION", onUpdate: "NO ACTION" },
     options: { type: "one-to-many", target: "QuestionOption", inverseSide: "question" },
   },
   indices: [{ name: "idx_questions_domain", columns: ["domain"] }, { name: "idx_questions_topic", columns: ["topic"] }],
-  checks: [{ expression: "type IN ('single-choice', 'multiple-choice')" }],
+  checks: [{ name: "CHK_questions_type", expression: "type IN ('single-choice', 'multiple-choice', 'yes-no-matrix', 'statement-completion')" }],
 });
 export const QuestionOptionEntity = new EntitySchema<QuestionOption>({
   name: "QuestionOption", tableName: "question_options",

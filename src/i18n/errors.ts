@@ -43,7 +43,13 @@ const messages: Record<string, string> = {
   "A single-choice question must have exactly one correct answer": "singleCorrect",
   "A multiple-choice question must have at least two correct answers": "multipleCorrect",
   "Only schema version 1 is supported": "schemaVersion",
-  "Question bank cannot be empty": "emptyBank"
+  "Question bank cannot be empty": "emptyBank",
+  "A matrix question must have exactly three statements": "matrixThree",
+  "Statement ids must be unique": "uniqueStatements",
+  "Select Yes or No for each statement before confirming": "matrixComplete",
+  "Select only one answer per statement": "onePerStatement",
+  "A completion question must have exactly one correct answer": "completionCorrect",
+  "A completion question must contain exactly one {{blank}} token": "completionBlank"
 };
 
 // The service layer retains its original errors and validation behavior.

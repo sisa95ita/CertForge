@@ -17,7 +17,11 @@
     "questionsLabel": "Domande",
     "duration": "Durata",
     "credit": "{credit}/{total} punti · {percent}",
-    "components": "{correct} / {total} risposte corrette ({percent} del punteggio)"
+    "components": "{correct} / {total} risposte corrette ({percent} del punteggio)",
+    "yes": "Sì",
+    "no": "No",
+    "statementsCorrect": "{correct} di {total} affermazioni corrette",
+    "questionCredit": "{credit} / 1 punto"
   },
   "Navigation": {
     "import": "Importa",
@@ -78,7 +82,10 @@
     "answered": "Con risposta: {count}",
     "unanswered": "Senza risposta: {count}",
     "forReview": "Da rivedere: {count}",
-    "submitWarning": "{count, plural, one {# domanda è senza risposta.} other {# domande sono senza risposta.}} Vuoi consegnare comunque?"
+    "submitWarning": "{count, plural, one {# domanda è senza risposta.} other {# domande sono senza risposta.}} Vuoi consegnare comunque?",
+    "selectAnswer": "Seleziona una risposta",
+    "selectYesNo": "Seleziona Sì o No per ogni affermazione",
+    "statement": "Affermazione"
   },
   "NewSimulation": {
     "title": "Nuova simulazione",
@@ -114,7 +121,8 @@
     "domain": "Area: {value}",
     "topic": "Argomento: {value}",
     "difficulty": "Difficoltà: {value}",
-    "bank": "Raccolta: {value}"
+    "bank": "Raccolta: {value}",
+    "correctCompletion": "Completamento corretto"
   },
   "History": {
     "title": "Cronologia",
@@ -187,7 +195,7 @@
     "uniqueCorrect": "Le risposte corrette devono essere univoche",
     "singleCorrect": "Una domanda a risposta singola deve avere esattamente una risposta corretta",
     "multipleCorrect": "Una domanda a risposta multipla deve avere almeno due risposte corrette",
-    "schemaVersion": "È supportata solo la versione 1 dello schema",
+    "schemaVersion": "Sono supportate solo le versioni 1 e 2 dello schema",
     "emptyBank": "La raccolta di domande non può essere vuota",
     "missingOption": "La risposta corretta ''{id}'' non corrisponde ad alcuna opzione",
     "duplicateQuestion": "L’ID della domanda ''{id}'' è duplicato",
@@ -196,6 +204,12 @@
     "tooBig": "Il valore supera il massimo di {maximum}",
     "field": "{path}: {message}",
     "document": "documento",
-    "validationFailed": "Validazione non riuscita"
+    "validationFailed": "Validazione non riuscita",
+    "matrixThree": "Una domanda a matrice deve contenere esattamente tre affermazioni",
+    "uniqueStatements": "Gli ID delle affermazioni devono essere univoci",
+    "matrixComplete": "Seleziona Sì o No per ogni affermazione prima di confermare",
+    "onePerStatement": "Seleziona una sola risposta per affermazione",
+    "completionCorrect": "Una domanda di completamento deve avere esattamente una risposta corretta",
+    "completionBlank": "Una domanda di completamento deve contenere esattamente un segnaposto"
   }
 }

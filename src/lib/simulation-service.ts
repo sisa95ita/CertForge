@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { EntityManager } from "typeorm";
 import { withDatabase, type CertForgeDatabase } from "./db";
 import { QuestionBankEntity, QuestionEntity, QuestionOptionEntity, SimulationEntity, SimulationQuestionEntity, SimulationAnswerEntity, type Question, type Simulation } from "./persistence/entities";
-import { evaluateAnswer, evaluationFromScore } from "./evaluation";
+import { evaluateQuestion, evaluationFromScore } from "./evaluation";
+import { correctAnswerIds, isFullyAnswered, matrixAnswerId, validAnswerIds } from "./question-answers";
 import { selectQuestions, shuffled, type SelectableQuestion } from "./selection";
 import type { SimulationView, SnapshotQuestion, EvaluationResult } from "./types";
 
@@ -45,6 +46,7 @@ async function snapshotQuestion(manager: EntityManager, row: PoolRow, random: ()
     id: row.questionId, domain: row.domain, topic: q.topic, difficulty: q.difficulty, type: q.type, question: q.text,
     answers: shuffled(options.map((answer) => ({ id: answer.option_id, text: answer.text })), random),
     correctAnswers: q.correct_answers_json, explanation: q.explanation,
+    ...(q.type === "yes-no-matrix" ? { statements: q.statements_json ?? [] } : {}),
     ...(q.reference_title && q.reference_url ? { learnReference: { title: q.reference_title, url: q.reference_url } } : {}),
   };
 }
@@ -123,11 +125,12 @@ async function saveAnswersOperation(db: CertForgeDatabase, id: string, position:
   if (!question) throw new Error("Question not found");
   if (question.is_locked) throw new Error("This answer is locked");
   const snapshot = question.snapshot_json;
-  const valid = new Set(snapshot.answers.map((answer) => answer.id));
+  const valid = new Set(validAnswerIds(snapshot));
   if (answers.some((answer) => !valid.has(answer))) throw new Error("An answer option is invalid");
-  if (snapshot.type === "single-choice" && answers.length > 1) throw new Error("Select only one answer");
+  if ((snapshot.type === "single-choice" || snapshot.type === "statement-completion") && answers.length > 1) throw new Error("Select only one answer");
   const unique = [...new Set(answers)];
   if (snapshot.type === "multiple-choice" && unique.length > snapshot.correctAnswers.length) throw new Error(`Select at most ${snapshot.correctAnswers.length} answers`);
+  if (snapshot.type === "yes-no-matrix" && snapshot.statements?.some((statement) => unique.includes(matrixAnswerId(statement.id, "yes")) && unique.includes(matrixAnswerId(statement.id, "no")))) throw new Error("Select only one answer per statement");
   const now = new Date().toISOString();
   await db.transaction(async (manager) => {
     const saved = manager.getRepository(SimulationAnswerEntity);
@@ -159,8 +162,9 @@ async function confirmTrainingAnswerOperation(db: CertForgeDatabase, id: string,
   const answers = await db.getRepository(SimulationAnswerEntity).findBy({ simulation_id: id, position });
   if (!answers.length) throw new Error("Select at least one answer before confirming");
   const snapshot = question.snapshot_json;
-  if (answers.length > snapshot.correctAnswers.length) throw new Error(`Select at most ${snapshot.correctAnswers.length} answers`);
-  const evaluation = evaluateAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers, snapshot.type);
+  if (snapshot.type === "yes-no-matrix" && !isFullyAnswered({ question: snapshot, selectedAnswers: answers.map((answer) => answer.option_id) })) throw new Error("Select Yes or No for each statement before confirming");
+  if (answers.length > correctAnswerIds(snapshot).length) throw new Error(`Select at most ${correctAnswerIds(snapshot).length} answers`);
+  const evaluation = evaluateQuestion(answers.map((answer) => answer.option_id), snapshot);
   await db.getRepository(SimulationQuestionEntity).update({ simulation_id: id, position }, { is_locked: true, is_correct: evaluation.status === "correct", score_contribution: evaluation.score });
   return evaluation;
 }
@@ -176,7 +180,7 @@ async function submitSimulationOperation(db: CertForgeDatabase, id: string): Pro
       const snapshot = row.snapshot_json;
       const answers = await manager.getRepository(SimulationAnswerEntity).findBy({ simulation_id: id, position: row.position });
       const evaluation = row.score_contribution === null
-        ? evaluateAnswer(answers.map((answer) => answer.option_id), snapshot.correctAnswers, snapshot.type)
+        ? evaluateQuestion(answers.map((answer) => answer.option_id), snapshot)
         : evaluationFromScore(row.score_contribution);
       earnedCredit += evaluation.score;
       await manager.getRepository(SimulationQuestionEntity).update({ simulation_id: id, position: row.position }, { is_locked: true, is_correct: evaluation.status === "correct", score_contribution: evaluation.score });

@@ -98,6 +98,18 @@ Schema version 1 supports `single-choice` and `multiple-choice`. Multiple-choice
 
 [`examples/demo-question-bank.json`](examples/demo-question-bank.json) is a small generic bank demonstrating both question types, domains, topics, explanations, and references. It is demo data—not certification study content.
 
+
+### Schema version 2
+
+V2 retains the same bank UUID/version semantics and also supports `yes-no-matrix` and `statement-completion`. V1 banks remain supported as imported; no conversion or database reset is needed. V2 difficulty is one of `easy`, `medium`, or `hard`. See [`examples/demo-question-bank-v2.json`](examples/demo-question-bank-v2.json) for an importable example.
+
+- A matrix contains exactly three `statements`, each with a unique stable `id`, non-empty `text` and `explanation`, and a `correctAnswer` of `yes` or `no`. The overall explanation is optional. Each correct row earns one third of a point; unanswered rows earn zero. Training requires all rows before confirmation. Exams allow partial answers and submission.
+- A completion question has exactly one `{{blank}}` token, at least two unique answer options, and exactly one correct option ID. Its inline dropdown displays answer text and scores either zero or one point. Its explanation is required.
+
+Training locks confirmed answers and reveals feedback, explanations, and Learn references. Exams reveal feedback in results. Both new types use the existing normalized score and domain/topic statistics.
+
+The explicit `QuestionTypesV21792454400000` TypeORM migration expands the question-type constraint and adds nullable `questions.statements_json`. TypeORM manages the SQLite table rebuild and preserves existing rows, indexes, options, answers, and historical scores. Matrix selections use collision-safe statement-ID/Yes-No pairs in the existing saved-answer records. Simulation snapshots preserve all matrix content and statement order; completion snapshots preserve the shuffled option order and stable IDs across navigation, refresh, and restart. Retry uses historical snapshots, clears selections, and reshuffles completion options. The migration refuses downgrade to avoid losing V2 question data.
+
 ## Simulations and scoring (V1.1)
 
 Choose **All available** to include the entire filtered pool, or **Custom** for the existing random, domain-aware selection. Question and answer option orders are randomized at creation and saved in each simulation snapshot.

@@ -1,3 +1,6 @@
+import type { SnapshotQuestion } from "./types";
+import { correctAnswerIds } from "./question-answers";
+
 export function normalizeAnswers(answers: readonly string[]): string[] {
   return [...new Set(answers)].sort();
 }
@@ -15,7 +18,7 @@ export function evaluationFromScore(score: number): import("./types").Evaluation
 
 export function evaluateAnswer(selected: readonly string[], correct: readonly string[], type: import("./types").QuestionType): import("./types").EvaluationResult {
   const unique = normalizeAnswers(selected);
-  if (type === "single-choice") return evaluationFromScore(isCorrectAnswer(unique, correct) ? 1 : 0);
+  if (type === "single-choice" || type === "statement-completion") return evaluationFromScore(isCorrectAnswer(unique, correct) ? 1 : 0);
   // Older active sessions may contain selections above the new limit.
   if (!correct.length || unique.length > correct.length) return evaluationFromScore(0);
   const required = new Set(correct);
@@ -24,4 +27,8 @@ export function evaluateAnswer(selected: readonly string[], correct: readonly st
 
 export function canSelectAnswer(selected: readonly string[], optionId: string, requiredCount: number): boolean {
   return selected.includes(optionId) || new Set(selected).size < requiredCount;
+}
+
+export function evaluateQuestion(selected: readonly string[], question: SnapshotQuestion): import("./types").EvaluationResult {
+  return evaluateAnswer(selected, correctAnswerIds(question), question.type);
 }

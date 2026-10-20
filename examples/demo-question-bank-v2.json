@@ -1,0 +1,76 @@
+{
+  "id": "57711886-a317-48f8-a505-f6cf222ebdac",
+  "schemaVersion": 2,
+  "version": 1,
+  "title": "Microsoft-style question types demo",
+  "description": "Demo data for matrix and statement-completion questions.",
+  "certification": {
+    "name": "Example Certification",
+    "code": "EX-100"
+  },
+  "questions": [
+    {
+      "id": "matrix-demo",
+      "domain": "Cloud fundamentals",
+      "topic": "Cloud services",
+      "difficulty": "medium",
+      "type": "yes-no-matrix",
+      "question": "For each statement, select Yes if the statement is true. Otherwise, select No.",
+      "statements": [
+        {
+          "id": "scale",
+          "text": "Cloud resources can be scaled to meet demand.",
+          "correctAnswer": "yes",
+          "explanation": "Cloud platforms offer mechanisms for increasing and decreasing resource capacity."
+        },
+        {
+          "id": "ownership",
+          "text": "Using public cloud always requires owning the physical servers.",
+          "correctAnswer": "no",
+          "explanation": "The public cloud provider owns and operates its physical infrastructure."
+        },
+        {
+          "id": "responsibility",
+          "text": "Customers retain responsibilities when using cloud services.",
+          "correctAnswer": "yes",
+          "explanation": "Customer responsibilities depend on the service model."
+        }
+      ],
+      "explanation": "Cloud services use a shared responsibility model.",
+      "learnReference": {
+        "title": "Shared responsibility in the cloud",
+        "url": "https://learn.microsoft.com/en-us/azure/security/fundamentals/shared-responsibility"
+      }
+    },
+    {
+      "id": "completion-demo",
+      "domain": "Cloud fundamentals",
+      "topic": "Service models",
+      "difficulty": "easy",
+      "type": "statement-completion",
+      "question": "A managed application delivered over the internet is an example of {{blank}}.",
+      "answers": [
+        {
+          "id": "saas",
+          "text": "Software as a service"
+        },
+        {
+          "id": "iaas",
+          "text": "Infrastructure as a service"
+        },
+        {
+          "id": "onprem",
+          "text": "On-premises infrastructure"
+        }
+      ],
+      "correctAnswers": [
+        "saas"
+      ],
+      "explanation": "SaaS delivers managed software applications to customers.",
+      "learnReference": {
+        "title": "Shared responsibility in the cloud",
+        "url": "https://learn.microsoft.com/en-us/azure/security/fundamentals/shared-responsibility"
+      }
+    }
+  ]
+}

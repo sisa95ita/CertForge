@@ -7,9 +7,13 @@ import { createTestDb } from "./test-db";
 import { createDataSource, initializeDatabase } from "../persistence/data-source";
 import { Baseline1791158400000 } from "../persistence/migrations/1791158400000-Baseline";
 import { createLegacyDatabase } from "./legacy-db";
-import { getCatalog, getSimulation, retrySimulation, saveAnswers, submitSimulation } from "../simulation-service";
+import { getCatalog, getSimulation, retrySimulation, saveAnswers, submitSimulation, createSimulation } from "../simulation-service";
 import { listSimulations, progressOverview } from "../history-service";
 import { simulationStatistics } from "../statistics";
+
+import { importQuestionBank } from "../import-service";
+import { SimulationAnswerEntity } from "../persistence/entities";
+import { v2Bank } from "./v2-fixtures";
 
 const databases: DataSource[] = [];
 const directories: string[] = [];
@@ -43,7 +47,7 @@ describe("TypeORM migrations", () => {
     expect(indexes.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_questions_domain", "idx_questions_topic", "idx_simulations_status"]));
   });
 
-  it.each([1, 2] as const)("adopts populated pre-TypeORM V%s without recreating tables or changing historical data", async (version) => {
+  it.each([1, 2] as const)("adopts populated pre-TypeORM V%s and preserves all historical data through the V2 upgrade", async (version) => {
     const file = filename();
     const legacy = createLegacyDatabase(file, version);
     const before = Object.fromEntries(tables.map((table) => [table, legacy.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
@@ -52,13 +56,18 @@ describe("TypeORM migrations", () => {
     const db = await initializeDatabase(createDataSource(file)); databases.push(db);
     for (const table of tables) {
       const rows = await db.query(`SELECT * FROM ${table} ORDER BY rowid`);
-      const comparable = version === 1 ? rows.map((row: Record<string, unknown>) => {
-        const copy = { ...row }; delete copy.score_contribution; delete copy.retried_from_simulation_id; return copy;
-      }) : rows;
+      const comparable = rows.map((row: Record<string, unknown>) => {
+        const copy = { ...row };
+        if (table === "questions") { expect(copy.statements_json).toBeNull(); delete copy.statements_json; }
+        if (version === 1) { delete copy.score_contribution; delete copy.retried_from_simulation_id; }
+        return copy;
+      });
       expect(comparable).toEqual(before[table]);
     }
     const afterRoots = await db.query("SELECT name, rootpage FROM sqlite_master WHERE type = 'table' AND name != 'migrations' AND name != 'sqlite_sequence' ORDER BY name");
-    expect(afterRoots).toEqual(roots);
+    // The questions CHECK constraint requires a TypeORM-managed SQLite rebuild.
+    const untouched = (rows: { name: string }[]) => rows.filter((row) => row.name !== "questions");
+    expect(untouched(afterRoots)).toEqual(untouched(roots as { name: string }[]));
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: version }]);
     expect(await db.query("PRAGMA journal_mode")).toEqual([{ journal_mode: "wal" }]);
     expect(await db.runMigrations()).toEqual([]);
@@ -91,5 +100,26 @@ describe("TypeORM migrations", () => {
     const Database = (await import("better-sqlite3")).default; const raw = new Database(file);
     try { expect(raw.prepare("SELECT * FROM question_banks").all()).toEqual(banks); expect(raw.pragma("user_version", { simple: true })).toBe(3); }
     finally { raw.close(); }
+  });
+
+  it("upgrades an already-adopted TypeORM database and keeps its V1 history intact", async () => {
+    const file = filename();
+    createLegacyDatabase(file, 2).close();
+    const old = await initializeDatabase(createDataSource(file).setOptions({ migrations: [Baseline1791158400000] }));
+    const historical = await getSimulation(old, "complete-exam");
+    const answers = await old.getRepository(SimulationAnswerEntity).find();
+    await old.destroy();
+    const db = await initializeDatabase(createDataSource(file)); databases.push(db);
+    expect(await db.query("SELECT name FROM migrations ORDER BY id")).toEqual([
+      { name: "Baseline1791158400000" }, { name: "QuestionTypesV21792454400000" },
+    ]);
+    expect(await getSimulation(db, "complete-exam")).toEqual(historical);
+    expect(await db.getRepository(SimulationAnswerEntity).find()).toEqual(answers);
+    expect((await importQuestionBank(db, v2Bank())).status).toBe("imported");
+    const id = await createSimulation(db, { mode: "exam", questionCount: 2, bankIds: [v2Bank().id] }, () => 0.999);
+    expect((await getSimulation(db, id))!.questions.map((q) => q.question.type)).toEqual(["yes-no-matrix", "statement-completion"]);
+    expect(await db.query("PRAGMA foreign_key_check")).toEqual([]);
+    expect(await db.query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(await db.runMigrations()).toEqual([]);
   });
 });

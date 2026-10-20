@@ -35,9 +35,10 @@ export async function importQuestionBank(db: CertForgeDatabase, input: unknown):
             ...key, domain: question.domain, topic: question.topic, difficulty: question.difficulty, type: question.type,
             text: question.question, explanation: question.explanation,
             reference_title: question.learnReference?.title ?? null, reference_url: question.learnReference?.url ?? null,
-            correct_answers_json: question.correctAnswers,
+            correct_answers_json: question.type === "yes-no-matrix" ? [] : question.correctAnswers,
+            statements_json: question.type === "yes-no-matrix" ? question.statements : null,
           });
-          for (const [index, answer] of question.answers.entries()) {
+          for (const [index, answer] of (question.type === "yes-no-matrix" ? [] : question.answers).entries()) {
             await manager.getRepository(QuestionOptionEntity).insert({ ...key, option_id: answer.id, text: answer.text, display_order: index });
           }
         }

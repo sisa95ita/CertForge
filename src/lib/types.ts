@@ -3,8 +3,11 @@ export interface EvaluationResult {
   score: number;
 }
 
-export type QuestionType = "single-choice" | "multiple-choice";
+export type QuestionType = "single-choice" | "multiple-choice" | "yes-no-matrix" | "statement-completion";
 export type SimulationMode = "training" | "exam";
+
+export type YesNo = "yes" | "no";
+export interface MatrixStatement { id: string; text: string; correctAnswer: YesNo; explanation: string }
 
 export interface SnapshotQuestion {
   bankTitle: string;
@@ -17,6 +20,7 @@ export interface SnapshotQuestion {
   question: string;
   answers: { id: string; text: string }[];
   correctAnswers: string[];
+  statements?: MatrixStatement[];
   explanation: string;
   learnReference?: { title: string; url: string };
 }

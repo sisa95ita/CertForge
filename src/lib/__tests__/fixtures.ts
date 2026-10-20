@@ -1,5 +1,5 @@
-import type { QuestionBankInput } from "../question-bank-schema";
-export function testBank(version = 1, suffix = ""): QuestionBankInput {
+import type { QuestionBankV1Input } from "../question-bank-schema";
+export function testBank(version = 1, suffix = ""): QuestionBankV1Input {
   return {
     id: "98f03ec4-7b58-45db-a1ac-f30d072433c4", schemaVersion: 1, version, title: "Bank" + suffix, description: "Tests",
     certification: { name: "Generic certification", code: "TEST" },

@@ -17,7 +17,11 @@
     "questionsLabel": "Questions",
     "duration": "Duration",
     "credit": "{credit}/{total} credit · {percent}",
-    "components": "{correct} / {total} components correct ({percent} credit)"
+    "components": "{correct} / {total} components correct ({percent} credit)",
+    "yes": "Yes",
+    "no": "No",
+    "statementsCorrect": "{correct} of {total} statements correct",
+    "questionCredit": "{credit} / 1 point"
   },
   "Navigation": {
     "import": "Import",
@@ -78,7 +82,10 @@
     "answered": "Answered: {count}",
     "unanswered": "Unanswered: {count}",
     "forReview": "For review: {count}",
-    "submitWarning": "{count, plural, one {# question is unanswered.} other {# questions are unanswered.}} Submit anyway?"
+    "submitWarning": "{count, plural, one {# question is unanswered.} other {# questions are unanswered.}} Submit anyway?",
+    "selectAnswer": "Select an answer",
+    "selectYesNo": "Select Yes or No for each statement",
+    "statement": "Statement"
   },
   "NewSimulation": {
     "title": "New Simulation",
@@ -114,7 +121,8 @@
     "domain": "Domain: {value}",
     "topic": "Topic: {value}",
     "difficulty": "Difficulty: {value}",
-    "bank": "Bank: {value}"
+    "bank": "Bank: {value}",
+    "correctCompletion": "Correct completion"
   },
   "History": {
     "title": "History",
@@ -187,7 +195,7 @@
     "uniqueCorrect": "Correct answers must be unique",
     "singleCorrect": "A single-choice question must have exactly one correct answer",
     "multipleCorrect": "A multiple-choice question must have at least two correct answers",
-    "schemaVersion": "Only schema version 1 is supported",
+    "schemaVersion": "Only schema versions 1 and 2 are supported",
     "emptyBank": "Question bank cannot be empty",
     "missingOption": "Correct answer ''{id}'' does not reference an option",
     "duplicateQuestion": "Duplicate question id ''{id}''",
@@ -196,6 +204,12 @@
     "tooBig": "Value exceeds the maximum of {maximum}",
     "field": "{path}: {message}",
     "document": "document",
-    "validationFailed": "Validation failed"
+    "validationFailed": "Validation failed",
+    "matrixThree": "A matrix question must have exactly three statements",
+    "uniqueStatements": "Statement IDs must be unique",
+    "matrixComplete": "Select Yes or No for each statement before confirming",
+    "onePerStatement": "Select only one answer per statement",
+    "completionCorrect": "A completion question must have exactly one correct answer",
+    "completionBlank": "A completion question must contain exactly one blank token"
   }
 }
