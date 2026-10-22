@@ -44,7 +44,7 @@ describe("TypeORM migrations", () => {
     expect(await db.runMigrations()).toEqual([]);
     expect(await db.query("PRAGMA foreign_keys")).toEqual([{ foreign_keys: 1 }]);
     const indexes = await db.query("SELECT name FROM sqlite_master WHERE type = 'index'") as { name: string }[];
-    expect(indexes.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_questions_domain", "idx_questions_topic", "idx_simulations_status"]));
+    expect(indexes.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_questions_domain", "idx_questions_topic", "idx_simulations_status", "idx_simulation_questions_exposure"]));
   });
 
   it.each([1, 2] as const)("adopts populated pre-TypeORM V%s and preserves all historical data through the V2 upgrade", async (version) => {
@@ -65,8 +65,8 @@ describe("TypeORM migrations", () => {
       expect(comparable).toEqual(before[table]);
     }
     const afterRoots = await db.query("SELECT name, rootpage FROM sqlite_master WHERE type = 'table' AND name != 'migrations' AND name != 'sqlite_sequence' ORDER BY name");
-    // The questions CHECK constraint requires a TypeORM-managed SQLite rebuild.
-    const untouched = (rows: { name: string }[]) => rows.filter((row) => row.name !== "questions");
+    // The questions CHECK and retry foreign key require TypeORM-managed SQLite rebuilds.
+    const untouched = (rows: { name: string }[]) => rows.filter((row) => row.name !== "questions" && row.name !== "simulations");
     expect(untouched(afterRoots)).toEqual(untouched(roots as { name: string }[]));
     expect(await db.query("PRAGMA user_version")).toEqual([{ user_version: version }]);
     expect(await db.query("PRAGMA journal_mode")).toEqual([{ journal_mode: "wal" }]);
@@ -111,7 +111,7 @@ describe("TypeORM migrations", () => {
     await old.destroy();
     const db = await initializeDatabase(createDataSource(file)); databases.push(db);
     expect(await db.query("SELECT name FROM migrations ORDER BY id")).toEqual([
-      { name: "Baseline1791158400000" }, { name: "QuestionTypesV21792454400000" },
+      { name: "Baseline1791158400000" }, { name: "QuestionTypesV21792454400000" }, { name: "ExposureAndDeletion1792540800000" },
     ]);
     expect(await getSimulation(db, "complete-exam")).toEqual(historical);
     expect(await db.getRepository(SimulationAnswerEntity).find()).toEqual(answers);

@@ -80,7 +80,7 @@ export const SimulationEntity = new EntitySchema<Simulation>({
   columns: { id: text(true, true), mode: text(), status: text(), created_at: text(), started_at: text(), completed_at: text(false, true), duration_limit_seconds: integer(false, true), current_position: { type: "integer", default: 0 }, certification_codes: { type: "text", transformer: jsonText }, filters_json: { type: "text", transformer: jsonText }, score_percent: { type: "real", nullable: true }, retried_from_simulation_id: text(false, true) },
   relations: {
     questions: { type: "one-to-many", target: "SimulationQuestion", inverseSide: "simulation" },
-    retriedFrom: { type: "many-to-one", target: "Simulation", joinColumn: { name: "retried_from_simulation_id", referencedColumnName: "id" }, nullable: true, onDelete: "NO ACTION", onUpdate: "NO ACTION" },
+    retriedFrom: { type: "many-to-one", target: "Simulation", joinColumn: { name: "retried_from_simulation_id", referencedColumnName: "id" }, nullable: true, onDelete: "SET NULL", onUpdate: "NO ACTION" },
   },
   indices: [{ name: "idx_simulations_status", columns: ["status", "created_at"] }],
   checks: [{ expression: "mode IN ('training', 'exam')" }, { expression: "status IN ('in-progress', 'completed')" }],
@@ -92,6 +92,7 @@ export const SimulationQuestionEntity = new EntitySchema<SimulationQuestion>({
     simulation: { type: "many-to-one", target: "Simulation", inverseSide: "questions", joinColumn: { name: "simulation_id", referencedColumnName: "id" }, nullable: false, onDelete: "CASCADE", onUpdate: "NO ACTION" },
     answers: { type: "one-to-many", target: "SimulationAnswer", inverseSide: "question" },
   },
+  indices: [{ name: "idx_simulation_questions_exposure", columns: ["source_bank_id", "source_question_id"] }],
   checks: [{ expression: "score_contribution BETWEEN 0 AND 1" }],
 });
 export const SimulationAnswerEntity = new EntitySchema<SimulationAnswer>({

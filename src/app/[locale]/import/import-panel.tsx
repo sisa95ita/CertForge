@@ -4,9 +4,11 @@ import { useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { translateError } from "@/i18n/errors";
 import { presentation } from "@/i18n/format";
+import { useRouter } from "@/i18n/navigation";
 import type { ImportResult } from "@/lib/import-service";
 
 export function ImportPanel() {
+  const router = useRouter();
   const t = useTranslations("Import");
   const errors = useTranslations("Errors");
   const f = presentation(useLocale());
@@ -35,7 +37,7 @@ export function ImportPanel() {
       const response = await fetch("/api/import", { method: "POST", body: data });
       const body = await response.json() as { results?: ImportResult[]; error?: string };
       if (!response.ok || !body.results) throw new Error(body.error ?? "importFailed");
-      setResults(body.results); setFiles([]);
+      setResults(body.results); setFiles([]); router.refresh();
       if (inputRef.current) inputRef.current.value = "";
     } catch (value) { setError(value instanceof Error ? value.message : "importFailed"); }
     finally { setLoading(false); }

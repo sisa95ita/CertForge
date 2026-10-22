@@ -9,7 +9,7 @@ import { QuestionBankEntity, QuestionBankVersionEntity, QuestionEntity, Question
 import { createTestDb } from "./test-db";
 import { testBank } from "./fixtures";
 import { importQuestionBank } from "../import-service";
-import { createSimulation, getSimulation, getCatalog, saveAnswers, setCurrentPosition, setReviewFlag, submitSimulation } from "../simulation-service";
+import { confirmSimulation, RepetitionConfirmationRequiredError, createSimulation, getSimulation, getCatalog, saveAnswers, setCurrentPosition, setReviewFlag, submitSimulation } from "../simulation-service";
 
 const databases: DataSource[] = [];
 const directories: string[] = [];
@@ -62,7 +62,10 @@ describe("CertForge persistence", () => {
     const db = await testDb();
     const results = await Promise.all([importQuestionBank(db, testBank()), importQuestionBank(db, testBank()), importQuestionBank(db, testBank(2))]);
     expect(results.map((r) => r.status)).toEqual(["imported", "skipped", "updated"]);
-    const ids = await Promise.all(Array.from({ length: 6 }, () => createSimulation(db, { mode: "training", questionCount: 4 })));
+    const ids = await Promise.all(Array.from({ length: 6 }, () => createSimulation(db, { mode: "training", questionCount: 4 }).catch((error: unknown) => {
+      if (error instanceof RepetitionConfirmationRequiredError) return confirmSimulation(db, error.preview.token);
+      throw error;
+    })));
     expect(new Set(ids).size).toBe(6);
     expect(await db.getRepository(SimulationQuestionEntity).count()).toBe(24);
     await Promise.all(ids.map((id) => saveAnswers(db, id, 0, ["a"])));

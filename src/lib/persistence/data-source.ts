@@ -7,6 +7,8 @@ import { Baseline1791158400000 } from "./migrations/1791158400000-Baseline";
 
 import { QuestionTypesV21792454400000 } from "./migrations/1792454400000-QuestionTypesV2";
 
+import { ExposureAndDeletion1792540800000 } from "./migrations/1792540800000-ExposureAndDeletion";
+
 export function databasePath(): string {
   return process.env.CERTFORGE_DB_PATH ?? path.join(process.cwd(), "data", "certforge.db");
 }
@@ -17,7 +19,7 @@ export function createDataSource(filename = databasePath()): DataSource {
   return new DataSource({
     type: "better-sqlite3", database: filename, enableWAL: true,
     synchronize: false, migrationsRun: false,
-    entities, migrations: [Baseline1791158400000, QuestionTypesV21792454400000],
+    entities, migrations: [Baseline1791158400000, QuestionTypesV21792454400000, ExposureAndDeletion1792540800000],
   });
 }
 

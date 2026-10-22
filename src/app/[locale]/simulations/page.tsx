@@ -2,6 +2,7 @@ import { Link } from "@/i18n/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { presentation } from "@/i18n/format";
 import { Breakdown } from "./breakdown";
+import { DeleteButton } from "@/components/delete-button";
 import { RetryButton } from "./retry-button";
 import { getDataSource } from "@/lib/db";
 import { listSimulations, progressOverview } from "@/lib/history-service";
@@ -29,7 +30,7 @@ export default async function SimulationsPage() {
       <div className="mt-3 grid gap-3 md:grid-cols-2">{await Breakdown({title: p("byDomain"), items: overview.byDomain, limit: 8})}{await Breakdown({title: p("byTopic"), items: overview.byTopic, limit: 8})}</div>
     </section>}
 
-    <section className="mt-9"><h2 className="text-xl font-extrabold">{h("title")}</h2>{history.length === 0 ? <div className="card muted mt-3 p-7 text-center">{h("empty")}</div> : <div className="card mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-slate-200 bg-slate-50"><tr>{[h("date"), c("certification"), h("mode"), h("score"), c("questionsLabel"), c("duration"), h("actions")].map((label) => <th className="p-3 font-bold" key={label}>{label}</th>)}</tr></thead><tbody>{history.map((item) => <tr className="border-b border-slate-100 last:border-0" key={item.id}><td className="whitespace-nowrap p-3">{f.date(item.createdAt)}</td><td className="p-3">{item.certifications.join(", ")}</td><td className="p-3 capitalize">{c(item.mode)}</td><td className="p-3 font-bold">{item.scorePercent === null ? "—" : f.percent(item.scorePercent)}</td><td className="p-3">{f.number(item.questionCount)}</td><td className="whitespace-nowrap p-3">{f.duration(item.durationSeconds)}</td><td className="p-3"><Link className="font-bold text-blue-700" href={`/simulations/${item.id}/results`}>{h("review")}</Link><RetryButton simulationId={item.id} /></td></tr>)}</tbody></table></div>}</section>
+    <section className="mt-9"><h2 className="text-xl font-extrabold">{h("title")}</h2>{history.length === 0 ? <div className="card muted mt-3 p-7 text-center">{h("empty")}</div> : <div className="card mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="border-b border-slate-200 bg-slate-50"><tr>{[h("date"), c("certification"), h("mode"), h("score"), c("questionsLabel"), c("duration"), h("actions")].map((label) => <th className="p-3 font-bold" key={label}>{label}</th>)}</tr></thead><tbody>{history.map((item) => <tr className="border-b border-slate-100 last:border-0" key={item.id}><td className="whitespace-nowrap p-3">{f.date(item.createdAt)}</td><td className="p-3">{item.certifications.join(", ")}</td><td className="p-3 capitalize">{c(item.mode)}</td><td className="p-3 font-bold">{item.scorePercent === null ? "—" : f.percent(item.scorePercent)}</td><td className="p-3">{f.number(item.questionCount)}</td><td className="whitespace-nowrap p-3">{f.duration(item.durationSeconds)}</td><td className="p-3"><Link className="font-bold text-blue-700" href={`/simulations/${item.id}/results`}>{h("review")}</Link><RetryButton simulationId={item.id} /><DeleteButton kind="simulation" id={item.id} /></td></tr>)}</tbody></table></div>}</section>
   </div>;
 }
 

@@ -1,5 +1,8 @@
 {
   "Common": {
+    "delete": "Elimina",
+    "cancel": "Annulla",
+    "back": "Indietro",
     "previous": "Precedente",
     "next": "Successiva",
     "all": "Tutte",
@@ -22,6 +25,14 @@
     "no": "No",
     "statementsCorrect": "{correct} di {total} affermazioni corrette",
     "questionCredit": "{credit} / 1 punto"
+  },
+  "Management": {
+    "importedBanks": "Raccolte di domande importate",
+    "noBanks": "Non ci sono raccolte di domande installate.",
+    "deleteBank": "Eliminare la raccolta di domande?",
+    "deleteBankDescription": "{title} e le sue domande importate non saranno più disponibili per nuove simulazioni. La cronologia delle simulazioni esistenti resterà invariata.",
+    "deleteSimulation": "Eliminare la simulazione?",
+    "deleteSimulationDescription": "Questo tentativo completato, le sue risposte e i risultati verranno eliminati definitivamente. Le statistiche dei progressi verranno aggiornate. Le raccolte di domande e i tentativi successivi resteranno invariati."
   },
   "Navigation": {
     "import": "Importa",
@@ -88,6 +99,9 @@
     "statement": "Affermazione"
   },
   "NewSimulation": {
+    "repeatTitle": "Alcune domande sono già state mostrate più volte.",
+    "repeatDescription": "{count, plural, one {# delle {total} domande selezionate è già stata proposta} other {# delle {total} domande selezionate sono già state proposte}} almeno {threshold} volte perché non sono disponibili domande meno utilizzate sugli stessi argomenti.",
+    "continueAnyway": "Continua comunque",
     "title": "Nuova simulazione",
     "description": "Scegli la modalità e, se vuoi, filtra le domande disponibili.",
     "noBanks": "Non ci sono raccolte di domande installate.",
@@ -146,6 +160,10 @@
     "empty": "Non ci sono ancora risultati."
   },
   "Errors": {
+    "deleteFailed": "Impossibile eliminare questo elemento",
+    "questionBankNotFound": "Raccolta di domande non trovata",
+    "deleteCompletedOnly": "Puoi eliminare solo le simulazioni completate",
+    "selectionExpired": "Le domande selezionate non sono più disponibili oppure l’anteprima è scaduta. Torna indietro e avvia di nuovo.",
     "notFound": "Pagina non trovata",
     "notFoundDescription": "Questa pagina o simulazione non è disponibile.",
     "back": "Torna alle simulazioni",

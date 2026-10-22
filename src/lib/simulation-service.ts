@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { EntityManager } from "typeorm";
 import { withDatabase, type CertForgeDatabase } from "./db";
 import { QuestionBankEntity, QuestionEntity, QuestionOptionEntity, SimulationEntity, SimulationQuestionEntity, SimulationAnswerEntity, type Question, type Simulation } from "./persistence/entities";
 import { evaluateQuestion, evaluationFromScore } from "./evaluation";
 import { correctAnswerIds, isFullyAnswered, matrixAnswerId, validAnswerIds } from "./question-answers";
-import { selectQuestions, shuffled, type SelectableQuestion } from "./selection";
+import { logicalQuestionKey, QUESTION_REPEAT_THRESHOLD, selectQuestions, shuffled, type SelectableQuestion } from "./selection";
 import type { SimulationView, SnapshotQuestion, EvaluationResult } from "./types";
 
 export const createSimulationSchema = z.object({
@@ -19,14 +19,31 @@ export const createSimulationSchema = z.object({
 });
 export type CreateSimulationInput = z.infer<typeof createSimulationSchema>;
 
+async function getQuestionExposuresOperation(db: CertForgeDatabase, bankIds?: string[]): Promise<Map<string, number>> {
+  const query = db.getRepository(SimulationQuestionEntity).createQueryBuilder("q")
+    .innerJoin("q.simulation", "s")
+    .select("q.source_bank_id", "bankId").addSelect("q.source_question_id", "questionId")
+    .addSelect("COUNT(DISTINCT q.simulation_id)", "count")
+    .where("q.source_bank_id <> '' AND q.source_question_id <> ''")
+    .groupBy("q.source_bank_id").addGroupBy("q.source_question_id");
+  if (bankIds) {
+    if (!bankIds.length) return new Map();
+    query.andWhere("q.source_bank_id IN (:...bankIds)", { bankIds });
+  }
+  const rows = await query.getRawMany<{ bankId: string; questionId: string; count: number }>();
+  return new Map(rows.map((row) => [logicalQuestionKey(row), Number(row.count)]));
+}
+
 interface PoolRow extends SelectableQuestion { question: Question; bankTitle: string; certificationName: string; certificationCode: string }
 async function getPool(db: CertForgeDatabase, input: Pick<CreateSimulationInput, "bankIds" | "certification" | "domain" | "topic">): Promise<PoolRow[]> {
   const questions = await db.getRepository(QuestionEntity).createQueryBuilder("q")
     .innerJoinAndSelect("q.version", "v")
     .innerJoinAndSelect("v.bank", "b", "b.current_version = q.bank_version")
     .getMany();
+  const exposures = await getQuestionExposuresOperation(db, [...new Set(questions.map((q) => q.bank_id))]);
   return questions.map((question) => ({
     bankId: question.bank_id, bankVersion: question.bank_version, questionId: question.question_id, domain: question.domain,
+    topic: question.topic, exposureCount: exposures.get(logicalQuestionKey({ bankId: question.bank_id, questionId: question.question_id })) ?? 0,
     question, bankTitle: question.version!.bank!.title, certificationName: question.version!.bank!.certification_name, certificationCode: question.version!.bank!.certification_code,
   })).filter((row) =>
     (!input.bankIds.length || input.bankIds.includes(row.bankId)) &&
@@ -51,9 +68,72 @@ async function snapshotQuestion(manager: EntityManager, row: PoolRow, random: ()
   };
 }
 
+const previewSecret = randomBytes(32);
+const selectedQuestionSchema = z.object({
+  bankId: z.string(), bankVersion: z.number().int(), questionId: z.string(), fingerprint: z.string(),
+});
+const selectionPlanSchema = z.object({
+  input: createSimulationSchema, questions: z.array(selectedQuestionSchema), createdAt: z.number(),
+});
+export interface SelectionPreview {
+  token: string; repeatedCount: number; totalCount: number; threshold: number;
+}
+export class RepetitionConfirmationRequiredError extends Error {
+  constructor(readonly preview: SelectionPreview) { super("repetitionConfirmationRequired"); }
+}
+function fingerprint(row: PoolRow): string {
+  return createHash("sha256").update(JSON.stringify(row.question)).digest("hex");
+}
+function makePreview(input: CreateSimulationInput, selected: PoolRow[]): SelectionPreview {
+  const payload = Buffer.from(JSON.stringify({
+    input, createdAt: Date.now(), questions: selected.map((q) => ({
+      bankId: q.bankId, bankVersion: q.bankVersion, questionId: q.questionId, fingerprint: fingerprint(q),
+    })),
+  })).toString("base64url");
+  const signature = createHmac("sha256", previewSecret).update(payload).digest("base64url");
+  return {
+    token: payload + "." + signature,
+    repeatedCount: selected.filter((q) => (q.exposureCount ?? 0) >= QUESTION_REPEAT_THRESHOLD).length,
+    totalCount: selected.length, threshold: QUESTION_REPEAT_THRESHOLD,
+  };
+}
+
+async function previewSimulationOperation(db: CertForgeDatabase, rawInput: unknown, random: () => number): Promise<SelectionPreview> {
+  const input = createSimulationSchema.parse(rawInput);
+  return makePreview(input, selectQuestions(await getPool(db, input), input.questionCount, random));
+}
+
 async function createSimulationOperation(db: CertForgeDatabase, rawInput: unknown, random: () => number): Promise<string> {
   const input = createSimulationSchema.parse(rawInput);
   const selected = selectQuestions(await getPool(db, input), input.questionCount, random);
+  const preview = makePreview(input, selected);
+  if (preview.repeatedCount) throw new RepetitionConfirmationRequiredError(preview);
+  return persistSelection(db, input, selected, random);
+}
+
+async function confirmSimulationOperation(db: CertForgeDatabase, token: string, random: () => number): Promise<string> {
+  let plan: z.infer<typeof selectionPlanSchema>;
+  try {
+    const [payload, signature, extra] = token.split(".");
+    if (!payload || !signature || extra) throw new Error();
+    const expected = createHmac("sha256", previewSecret).update(payload).digest();
+    const actual = Buffer.from(signature, "base64url");
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new Error();
+    plan = selectionPlanSchema.parse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    if (Date.now() - plan.createdAt > 30 * 60 * 1000 || plan.createdAt > Date.now()) throw new Error();
+  } catch { throw new Error("selectionExpired"); }
+  const pool = new Map((await getPool(db, plan.input)).map((row) => [logicalQuestionKey(row), row]));
+  const selected = plan.questions.map((reference) => {
+    const row = pool.get(logicalQuestionKey(reference));
+    if (!row || row.bankVersion !== reference.bankVersion || fingerprint(row) !== reference.fingerprint) throw new Error("selectionExpired");
+    return row;
+  });
+  if (selected.length !== plan.input.questionCount || new Set(selected.map(logicalQuestionKey)).size !== selected.length) throw new Error("selectionExpired");
+  // No selection or replacement on confirmation: only answer order is randomized.
+  return persistSelection(db, plan.input, selected, random);
+}
+
+async function persistSelection(db: CertForgeDatabase, input: CreateSimulationInput, selected: PoolRow[], random: () => number): Promise<string> {
   const id = randomUUID();
   const now = new Date().toISOString();
   const durationSeconds = input.mode === "exam" ? (input.durationMinutes ?? Math.max(5, Math.ceil(input.questionCount * 1.5))) * 60 : null;
@@ -207,6 +287,10 @@ async function getCatalogOperation(db: CertForgeDatabase) {
     .getRawMany<{ bankId: string; certificationCode: string; domain: string; topic: string }>();
   return { banks, facets, inventory };
 }
+
+export function getQuestionExposures(db: CertForgeDatabase) { return withDatabase(db, () => getQuestionExposuresOperation(db)); }
+export function previewSimulation(db: CertForgeDatabase, input: unknown, random: () => number = Math.random) { return withDatabase(db, () => previewSimulationOperation(db, input, random)); }
+export function confirmSimulation(db: CertForgeDatabase, token: string, random: () => number = Math.random) { return withDatabase(db, () => confirmSimulationOperation(db, token, random)); }
 
 // Public entry points queue once. Internal calls use operation functions to avoid nested locks.
 export function createSimulation(db: CertForgeDatabase, input: unknown, random: () => number = Math.random) { return withDatabase(db, () => createSimulationOperation(db, input, random)); }

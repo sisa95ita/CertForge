@@ -1,9 +1,20 @@
 import { TypeORMError } from "typeorm";
 import { NextResponse } from "next/server";
+import { deleteSimulation } from "@/lib/deletion-service";
 import { getDataSource } from "@/lib/db";
 import { confirmTrainingAnswer, getSimulation, saveAnswers, setCurrentPosition, setReviewFlag, submitSimulation } from "@/lib/simulation-service";
 
 export const runtime = "nodejs";
+
+export async function DELETE(_: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    await deleteSimulation(await getDataSource(), (await context.params).id);
+    return new NextResponse(null, { status: 204 });
+  } catch (error) {
+    const message = error instanceof Error && !(error instanceof TypeORMError) ? error.message : "deleteFailed";
+    return NextResponse.json({ error: message }, { status: message === "Simulation not found" ? 404 : 400 });
+  }
+}
 
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;

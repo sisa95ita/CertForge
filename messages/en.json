@@ -1,5 +1,8 @@
 {
   "Common": {
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "back": "Back",
     "previous": "Previous",
     "next": "Next",
     "all": "All",
@@ -22,6 +25,14 @@
     "no": "No",
     "statementsCorrect": "{correct} of {total} statements correct",
     "questionCredit": "{credit} / 1 point"
+  },
+  "Management": {
+    "importedBanks": "Imported question banks",
+    "noBanks": "No question banks are installed.",
+    "deleteBank": "Delete question bank?",
+    "deleteBankDescription": "{title} and its imported questions will no longer be available for new simulations. Existing simulation history will not be affected.",
+    "deleteSimulation": "Delete simulation?",
+    "deleteSimulationDescription": "This completed attempt, its answers and results will be permanently deleted. Progress statistics will update. Question banks and retry attempts will not be affected."
   },
   "Navigation": {
     "import": "Import",
@@ -88,6 +99,9 @@
     "statement": "Statement"
   },
   "NewSimulation": {
+    "repeatTitle": "Some questions have already been shown several times.",
+    "repeatDescription": "{count, plural, one {# of the {total} selected questions has} other {# of the {total} selected questions have}} already been proposed at least {threshold} times because no less-used questions are available for the same topics.",
+    "continueAnyway": "Continue anyway",
     "title": "New Simulation",
     "description": "Choose a mode and narrow the question pool if needed.",
     "noBanks": "No question banks are installed.",
@@ -146,6 +160,10 @@
     "empty": "No results yet."
   },
   "Errors": {
+    "deleteFailed": "Could not delete this item",
+    "questionBankNotFound": "Question bank not found",
+    "deleteCompletedOnly": "Only completed simulations can be deleted",
+    "selectionExpired": "The selected questions are no longer available or the preview has expired. Go back and start again.",
     "notFound": "Page not found",
     "notFoundDescription": "This page or simulation could not be found.",
     "back": "Back to simulations",

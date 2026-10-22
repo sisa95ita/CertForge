@@ -112,9 +112,9 @@ The explicit `QuestionTypesV21792454400000` TypeORM migration expands the questi
 
 ## Simulations and scoring (V1.1)
 
-Choose **All available** to include the entire filtered pool, or **Custom** for the existing random, domain-aware selection. Question and answer option orders are randomized at creation and saved in each simulation snapshot.
+Choose **All available** to include the entire filtered pool, or **Custom** for exposure-aware selection within the existing domain/topic composition. Question and answer option orders are randomized at creation and saved in each simulation snapshot.
 
-History lists individual completed attempts with **Review** and **Retry**. Retry creates a fresh attempt in the same mode, with the same time limit and historical question content, even after bank updates. Question and option order are shuffled again; answers, review flags, and timing start fresh. Progress separately aggregates completed attempts.
+History lists individual completed attempts with **Review**, **Retry**, and **Delete**. Retry creates a fresh attempt in the same mode, with the same time limit and historical question content, even after bank updates. Question and option order are shuffled again; answers, review flags, and timing start fresh. Progress separately aggregates completed attempts.
 
 Single-choice scoring remains binary. Multiple-choice questions allow at most the required number of selections and earn credit for each correctly selected component, without negative marking. Training evaluates only after confirmation. Overall, domain, and topic percentages use earned credit divided by question count.
 
@@ -125,3 +125,17 @@ The TypeORM baseline preserves imported banks, historical snapshots, and previou
 CertForge uses next-intl with Italian as the default UI language. `/` redirects to `/it`; English is available at `/en`. The header language switcher preserves the current route (including simulation IDs), query string and fragment. Existing page paths keep their names under `/it` and `/en`; API paths remain under `/api`.
 
 UI messages live in `messages/it.json` and `messages/en.json`. Question-bank text and metadata retain their imported language and are independent of the UI language. Locale changes do not write to the database or create simulations.
+
+## Catalog management and exposure-aware selection
+
+The Import page lists installed banks with their current version and question count. Deletion removes the bank and every imported catalog version, question and option in one transaction. Historical active/completed snapshots, answers, scoring, explanations and Learn references survive; Retry still uses those snapshots. The same UUID/version can subsequently be imported again.
+
+History supports confirmed deletion of completed attempts. Snapshot and answer ownership cascades remove attempt data; retry descendants remain independent through `ON DELETE SET NULL`. Progress and exposure derive from remaining attempts and update automatically.
+
+Exposure is the grouped count of distinct persisted simulation IDs per `(source_bank_id, source_question_id)`, independent of the imported bank version. Both active and completed attempts count; Retry creates another exposure. No counter is stored on catalog questions. Existing legacy and TypeORM snapshots already contain both source identities, so no backfill or snapshot edits are needed. Empty/unresolvable legacy identities are excluded instead of guessed. Deleting and reimporting a bank retains exposure when UUID and question IDs match.
+
+New Simulation preserves the existing randomized round-robin domain composition and its topic slots, then fills each domain/topic slot from the least-exposed eligible candidates, randomizing ties. A final replacement pass only uses unused lower-exposure candidates in the same domain/topic. `QUESTION_REPEAT_THRESHOLD` centrally defines the threshold of 3. All Available retains the entire eligible pool. Exposure counts stay out of question-taking screens.
+
+Unavoidable repeated questions return a read-only signed selection preview, without creating any database rows. Back discards it and retains form state. Continue anyway submits the same ordered bank/version/question identities and original filters; the server revalidates eligibility and immutable content before atomic creation, without selecting again. Previews expire after 30 minutes or a server restart; stale or edited previews ask the user to go back. Retry bypasses selection and warnings.
+
+The explicit `ExposureAndDeletion1792540800000` migration adds the logical-exposure index and changes the retry foreign key to `SET NULL`. It preserves existing data with `synchronize: false`; no database reset is required.

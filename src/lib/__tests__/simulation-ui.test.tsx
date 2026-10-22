@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { DeleteButton } from "@/components/delete-button";
+import { getQuestionExposures } from "../simulation-service";
+import { POST as createRoute } from "@/app/api/simulations/route";
+import { DELETE as deleteBankRoute } from "@/app/api/catalog/[id]/route";
+import { DELETE as deleteAttemptRoute } from "@/app/api/simulations/[id]/route";
 import { SimulationQuestionEntity, SimulationAnswerEntity } from "../persistence/entities";
 import { createElement, type ReactNode } from "react";
 import { NextIntlClientProvider, createTranslator } from "next-intl";
@@ -582,3 +587,91 @@ describe("V2 question controls and review", () => {
         render(provider(await ResultsPage({ params: Promise.resolve({ id, locale: "en" }) })));
         expect(screen.getByRole("heading", { name: expected })).toBeTruthy();
     });
+
+describe("deletion and repetition confirmation UI", () => {
+    // jsdom has no native modal implementation; exercise the same dialog events.
+    function dialogs() {
+        Object.defineProperties(HTMLDialogElement.prototype, {
+            showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
+            close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+        });
+    }
+
+    it.each(["en", "it"] as const)("preserves the form on Back and confirms the exact preview with no canceled writes in %s", async (locale) => {
+        dialogs(); navigation.locale = locale;
+        const { db } = await setup("training");
+        await createSimulation(db, { mode: "training", questionCount: 4 });
+        await createSimulation(db, { mode: "training", questionCount: 4 });
+        const before = await getQuestionExposures(db);
+        let token = "";
+        const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+            const response = await createRoute(new Request("http://localhost/api/simulations", init));
+            const body = await response.clone().json();
+            if (body.preview) token = body.preview.token;
+            return response;
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        render(provider(<NewSimulationForm catalog={await getCatalog(db)} />));
+        fireEvent.click(screen.getByRole("radio", { name: locale === "it" ? "Personalizzato" : "Custom" }));
+        const count = screen.getByRole("spinbutton", { name: locale === "it" ? "Numero personalizzato di domande" : "Custom question count" }) as HTMLInputElement;
+        fireEvent.change(count, { target: { value: "2" } });
+        const start = locale === "it" ? "Avvia allenamento" : "Start Training";
+        fireEvent.click(screen.getByRole("button", { name: start }));
+        const dialog = await screen.findByRole("dialog");
+        expect(dialog.textContent).toContain(locale === "it" ? "2 delle 2 domande selezionate" : "2 of the 2 selected questions");
+        expect(dialog.textContent).toContain(locale === "it" ? "almeno 3 volte" : "at least 3 times");
+        expect(await db.getRepository(SimulationQuestionEntity).count()).toBe(12);
+        fireEvent.click(within(dialog).getByRole("button", { name: locale === "it" ? "Indietro" : "Back" }));
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(count.value).toBe("2");
+        expect(await getQuestionExposures(db)).toEqual(before);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(navigation.push).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: start }));
+        const confirmation = await screen.findByRole("dialog");
+        const plan = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()) as { questions: { questionId: string }[] };
+        fireEvent.click(within(confirmation).getByRole("button", { name: locale === "it" ? "Continua comunque" : "Continue anyway" }));
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledTimes(1));
+        expect(fetchMock).toHaveBeenLastCalledWith("/api/simulations", expect.objectContaining({ body: JSON.stringify({ selectionToken: token }) }));
+        const href = navigation.push.mock.calls[0][0] as string;
+        const created = (await getSimulation(db, href.split("/").at(-1)!))!;
+        expect(created.questions.map((q) => q.question.id)).toEqual(plan.questions.map((q) => q.questionId));
+        expect(await db.getRepository(SimulationQuestionEntity).count()).toBe(14);
+    });
+
+    it.each(["en", "it"] as const)("confirms bank and history deletion, supports Cancel, and refreshes current data in %s", async (locale) => {
+        dialogs(); navigation.locale = locale;
+        const { db, id } = await setup("training");
+        await submitSimulation(db, id);
+        const fetchMock = vi.fn(async (url: string) => {
+            const context = { params: Promise.resolve({ id: url.includes("/catalog/") ? testBank().id : id }) };
+            const request = new Request("http://localhost" + url, { method: "DELETE" });
+            return url.includes("/catalog/") ? deleteBankRoute(request, context) : deleteAttemptRoute(request, context);
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        const label = locale === "it" ? "Elimina" : "Delete";
+        render(provider(<DeleteButton kind="bank" id={testBank().id} name="Bank" />));
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        let dialog = await screen.findByRole("dialog");
+        expect(dialog.textContent).toContain("Bank");
+        expect(dialog.textContent).toContain(locale === "it" ? "cronologia" : "history");
+        fireEvent.click(within(dialog).getByRole("button", { name: locale === "it" ? "Annulla" : "Cancel" }));
+        expect(fetchMock).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        dialog = await screen.findByRole("dialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: label }));
+        await waitFor(() => expect(navigation.refresh).toHaveBeenCalledTimes(1));
+        expect((await getCatalog(db)).banks).toHaveLength(0);
+        expect(await getSimulation(db, id)).not.toBeNull();
+        cleanup();
+        render(provider(<DeleteButton kind="simulation" id={id} />));
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        dialog = await screen.findByRole("dialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: label }));
+        await waitFor(() => expect(navigation.refresh).toHaveBeenCalledTimes(2));
+        expect(await getSimulation(db, id)).toBeNull();
+        const history = markup(await SimulationsPage());
+        expect(history).toContain(locale === "it" ? "Le simulazioni completate appariranno qui." : "Completed simulations will appear here.");
+    });
+});
