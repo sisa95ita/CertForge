@@ -109,6 +109,37 @@ describe("completed simulation deletion", () => {
 });
 
 describe("exposure and exact selection preview", () => {
+  it("exhausts unseen questions across topics before reusing any persisted logical question", async () => {
+    const bank = testBank(2);
+    bank.questions = Array.from({ length: 100 }, (_, index) => ({
+      ...testBank().questions[0], id: `q${index + 1}`, domain: "D", topic: index < 25 ? "A" : "B",
+    }));
+    await importQuestionBank(db, bank);
+    const request = { ...input, questionCount: 20, bankIds: [bank.id], certification: "TEST", domain: "D" };
+    const first = await createSimulation(db, { ...request, topic: "A" }, random);
+    const seen = new Set((await view(first)).questions.map((q) => q.question.id));
+    expect(seen.size).toBe(20);
+    for (let index = 0; index < 4; index++) {
+      const id = await createSimulation(db, request, random);
+      const rows = await db.getRepository(SimulationQuestionEntity).findBy({ simulation_id: id });
+      expect(rows).toHaveLength(20);
+      expect(new Set(rows.map((q) => logicalQuestionKey({ bankId: q.source_bank_id, questionId: q.source_question_id })))).toHaveLength(20);
+      for (const row of rows) {
+        expect(seen.has(row.source_question_id)).toBe(false);
+        seen.add(row.source_question_id);
+      }
+    }
+    expect(seen.size).toBe(100);
+    const before = await exposures();
+    expect([...before.values()]).toEqual(Array(100).fill(1));
+    const next = await view(await createSimulation(db, request, random));
+    expect(next.questions).toHaveLength(20);
+    for (const { question } of next.questions) {
+      expect(before.get(logicalQuestionKey({ bankId: bank.id, questionId: question.id }))).toBe(1);
+      expect(await count(question.id)).toBe(2);
+    }
+  });
+
   it("counts newly created active sets, selects unseen questions next, and follows external IDs across versions", async () => {
     const filtered = { ...input, questionCount: 1, domain: "D1", topic: "T1" };
     const first = await view(await createSimulation(db, filtered, random));

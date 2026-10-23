@@ -52,34 +52,48 @@ export function replaceRepeatedQuestions<T extends SelectableQuestion>(selected:
 
 export function selectQuestions<T extends SelectableQuestion>(pool: readonly T[], count: number, random: () => number = Math.random): T[] {
   if (!Number.isInteger(count) || count < 1) throw new Error("Question count must be a positive integer");
-  if (count > pool.length) throw new Error(`Only ${pool.length} questions are available for the selected filters`);
-
-  const groups = new Map<string, T[]>();
-  for (const question of shuffled(pool, random)) {
-    const key = question.domain || "Unspecified";
-    const group = groups.get(key) ?? [];
-    group.push(question);
-    groups.set(key, group);
+  const unique = new Map<string, T>();
+  for (const question of pool) {
+    const key = logicalQuestionKey(question);
+    if (!unique.has(key)) unique.set(key, question);
   }
-  const queues = shuffled([...groups.values()], random);
-  const composition: T[] = [];
-  while (composition.length < count) {
-    for (const queue of queues) {
-      const question = queue.shift();
-      if (question) composition.push(question);
-      if (composition.length === count) break;
+  const eligible = [...unique.values()];
+  if (count > eligible.length) throw new Error(`Only ${eligible.length} questions are available for the selected filters`);
+
+  const buckets = new Map<number, T[]>();
+  for (const question of eligible) {
+    const level = exposure(question);
+    const bucket = buckets.get(level) ?? [];
+    bucket.push(question);
+    buckets.set(level, bucket);
+  }
+
+  const selected: T[] = [];
+  // Exact exposure levels take priority, including distinct counts above the threshold.
+  for (const [, bucket] of [...buckets.entries()].sort(([a], [b]) => a - b)) {
+    const domains = new Map<string, Map<string, T[]>>();
+    for (const question of shuffled(bucket, random)) {
+      const domain = question.domain || "Unspecified";
+      const topics = domains.get(domain) ?? new Map<string, T[]>();
+      const key = topicKey(question);
+      const topic = topics.get(key) ?? [];
+      topic.push(question);
+      topics.set(key, topic);
+      domains.set(domain, topics);
     }
+    const queues = shuffled([...domains.values()], random).map((topics) => shuffled([...topics.values()], random));
+    const target = Math.min(count, selected.length + bucket.length);
+    // Round-robin domains, then topics within each domain, only at this exposure level.
+    while (selected.length < target) {
+      for (const topics of queues) {
+        const topic = topics.shift();
+        if (!topic) continue;
+        selected.push(topic.shift()!);
+        if (topic.length) topics.push(topic);
+        if (selected.length === target) break;
+      }
+    }
+    if (selected.length === count) break;
   }
-
-  // Preserve the original random domain/topic composition. Exposure only decides
-  // which questions fill those slots, so a large unseen topic cannot take over.
-  const topicQueues = new Map<string, T[]>();
-  for (const question of leastExposed(pool, random)) {
-    const key = topicKey(question);
-    const group = topicQueues.get(key) ?? [];
-    group.push(question);
-    topicQueues.set(key, group);
-  }
-  const selected = composition.map((slot) => topicQueues.get(topicKey(slot))!.shift()!);
-  return shuffled(replaceRepeatedQuestions(selected, pool, random), random);
+  return shuffled(replaceRepeatedQuestions(selected, eligible, random), random);
 }
