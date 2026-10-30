@@ -3,6 +3,7 @@ import { DeleteButton } from "@/components/delete-button";
 import { getQuestionExposures } from "../simulation-service";
 import { POST as createRoute } from "@/app/api/simulations/route";
 import { DELETE as deleteBankRoute } from "@/app/api/catalog/[id]/route";
+import { PATCH as updateSimulationRoute } from "@/app/api/simulations/[id]/route";
 import { DELETE as deleteAttemptRoute } from "@/app/api/simulations/[id]/route";
 import { SimulationQuestionEntity, SimulationAnswerEntity } from "../persistence/entities";
 import { createElement, type ReactNode } from "react";
@@ -320,8 +321,8 @@ describe("answer labels stay separate from stable IDs", () => {
             for (const label of selectedLabels) {
                 expect(screen.getByRole(role, { name: label + " Selected correctly" })).toBeTruthy();
             }
-            await waitFor(() => expect((screen.getByRole("button", { name: "View results" }) as HTMLButtonElement).disabled).toBe(false));
-            fireEvent.click(screen.getByRole("button", { name: "View results" }));
+            await waitFor(() => expect((screen.getAllByRole("button", { name: "Finish simulation" })[0] as HTMLButtonElement).disabled).toBe(false));
+            fireEvent.click(screen.getAllByRole("button", { name: "Finish simulation" })[0]);
         }
         else {
             fireEvent.click(screen.getAllByRole("button", { name: "Submit exam" })[0]);
@@ -466,10 +467,10 @@ describe("V2 question controls and review", () => {
         await select("Statement one", yes, 1);
         await select("Statement two", no, 2);
         expect(confirm.disabled).toBe(true);
-        expect(document.body.textContent).toContain(locale === "it" ? "Con risposta: 0" : "Answered: 0");
+        expect(document.body.textContent).toContain(locale === "it" ? "Domande completate: 0" : "Completed questions: 0");
         await select("Statement three", no, 3);
         expect(confirm.disabled).toBe(false);
-        expect(document.body.textContent).toContain(locale === "it" ? "Con risposta: 1" : "Answered: 1");
+        expect(document.body.textContent).toContain(locale === "it" ? "Domande completate: 0" : "Completed questions: 0");
         fireEvent.click(confirm);
         await screen.findByText(locale === "it" ? "Parzialmente corretta" : "Partially correct");
         for (const radio of screen.getAllByRole("radio")) expect((radio as HTMLInputElement).disabled).toBe(true);
@@ -673,5 +674,167 @@ describe("deletion and repetition confirmation UI", () => {
         expect(await getSimulation(db, id)).toBeNull();
         const history = markup(await SimulationsPage());
         expect(history).toContain(locale === "it" ? "Le simulazioni completate appariranno qui." : "Completed simulations will appear here.");
+    });
+});
+
+
+describe("Training completion flow", () => {
+    async function completionSetup(mode: "training" | "exam" = "training", count = 50, lockedCount = count - 1) {
+        const db = await createTestDb(); databases.push(db);
+        const templates = [testBank().questions[0], testBank().questions[1], matrixQuestion(), completionQuestion()];
+        await importQuestionBank(db, {
+            ...testBank(), schemaVersion: 2,
+            questions: Array.from({ length: count }, (_, index) => ({ ...templates[index % templates.length], id: "finish-" + index })),
+        });
+        vi.spyOn(database, "getDataSource").mockResolvedValue(db);
+        const id = await createSimulation(db, { mode, questionCount: count }, () => 0.999);
+        const initial = (await getSimulation(db, id))!;
+        for (const item of initial.questions.slice(0, lockedCount)) {
+            const answers = item.question.type === "yes-no-matrix"
+                ? item.question.statements!.map((row) => matrixAnswerId(row.id, row.correctAnswer))
+                : item.question.correctAnswers;
+            await saveAnswers(db, id, item.position, answers);
+            await confirmTrainingAnswer(db, id, item.position);
+        }
+        await setCurrentPosition(db, id, count - 1);
+        const fetchMock = vi.fn(async (_url: string, init?: RequestInit): Promise<Response> => updateSimulationRoute(
+            new Request("http://localhost/api/simulations/" + id, init), { params: Promise.resolve({ id }) },
+        ));
+        vi.stubGlobal("fetch", fetchMock);
+        return { db, id, fetchMock };
+    }
+
+    it.each(["en", "it"] as const)("offers Finish after confirming question 50, preserving feedback and review navigation in %s", async (locale) => {
+        navigation.locale = locale;
+        const { db, id, fetchMock } = await completionSetup();
+        const initial = (await getSimulation(db, id))!;
+        const final = initial.questions[49];
+        await saveAnswers(db, id, 49, final.question.correctAnswers);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const finish = locale === "it" ? "Termina simulazione" : "Finish simulation";
+        expect(screen.queryByRole("button", { name: finish })).toBeNull();
+        expect(screen.queryByRole("button", { name: /Next|Successiva/ })).toBeNull();
+        expect(screen.getByText(locale === "it" ? "Domande completate: 49" : "Completed questions: 49")).toBeTruthy();
+        expect(screen.getByText(locale === "it" ? "Domande da completare: 1" : "Questions remaining: 1", { exact: false })).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: locale === "it" ? "Conferma risposta" : "Confirm answer" }));
+        await waitFor(() => expect(screen.getAllByRole("button", { name: finish })).toHaveLength(2));
+        expect(screen.getByText(final.question.explanation)).toBeTruthy();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(navigation.push).not.toHaveBeenCalled();
+        expect((await getSimulation(db, id))!.status).toBe("in-progress");
+        expect(screen.getByText(locale === "it" ? "Domande completate: 50" : "Completed questions: 50")).toBeTruthy();
+        expect(screen.getByText(locale === "it" ? "Domande da completare: 0" : "Questions remaining: 0", { exact: false })).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: locale === "it" ? "Domanda 20" : "Question 20" }));
+        await screen.findByText(locale === "it" ? "Domanda 20 di 50" : "Question 20 of 50");
+        const sidebarFinish = within(screen.getByRole("complementary")).getByRole("button", { name: finish });
+        expect((sidebarFinish as HTMLButtonElement).disabled).toBe(false);
+        expect(screen.getByRole("button", { name: /Next|Successiva/ })).toBeTruthy();
+        expect(screen.getByRole("button", { name: /Previous|Precedente/ })).toBeTruthy();
+        fireEvent.click(sidebarFinish);
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/" + locale + "/simulations/" + id + "/results"));
+        expect(navigation.refresh).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenLastCalledWith("/api/simulations/" + id, expect.objectContaining({ method: "PATCH", body: JSON.stringify({ action: "submit" }) }));
+        const completed = (await getSimulation(db, id))!;
+        expect(completed.status).toBe("completed");
+        expect(completed.completedAt).toBeTruthy();
+        expect(completed.questions.every((question) => question.locked)).toBe(true);
+        cleanup();
+        render(provider(await ResultsPage({ params: Promise.resolve({ id, locale }) })));
+        expect(screen.getByRole("heading", { name: locale === "it" ? "100,0%" : "100.0%" })).toBeTruthy();
+    });
+
+    it.each([false, true])("cannot finish with 49 locked questions and a final answer selected=%s", async (selected) => {
+        const { db, id } = await completionSetup();
+        const initial = (await getSimulation(db, id))!;
+        if (selected) await saveAnswers(db, id, 49, initial.questions[49].question.correctAnswers);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        expect(screen.queryByRole("button", { name: "Finish simulation" })).toBeNull();
+        expect(screen.queryByRole("button", { name: /Next/ })).toBeNull();
+        expect(screen.getByText("Completed questions: 49")).toBeTruthy();
+        expect(screen.getByText("Questions remaining: 1", { exact: false })).toBeTruthy();
+        expect((await getSimulation(db, id))!.status).toBe("in-progress");
+    });
+
+    it("immediately offers Finish when resuming persisted locked questions away from the final question", async () => {
+        const { db, id, fetchMock } = await completionSetup("training", 50, 50);
+        await setCurrentPosition(db, id, 19);
+        render(provider(await SimulationPage({ params: Promise.resolve({ id, locale: "en" }) })));
+        expect(screen.getByText("Question 20 of 50")).toBeTruthy();
+        expect(within(screen.getByRole("complementary")).getByRole("button", { name: "Finish simulation" })).toBeTruthy();
+        expect(fetchMock).not.toHaveBeenCalled();
+        cleanup();
+        render(provider(await SimulationPage({ params: Promise.resolve({ id, locale: "en" }) })));
+        expect(screen.getByRole("button", { name: "Finish simulation" })).toBeTruthy();
+    });
+
+    it.each(["single-choice", "multiple-choice", "yes-no-matrix", "statement-completion"] as const)("offers Finish after confirming the remaining %s question", async (type) => {
+        const { db, id } = await completionSetup("training", 4, 0);
+        const initial = (await getSimulation(db, id))!;
+        const final = initial.questions.find((item) => item.question.type === type)!;
+        for (const item of initial.questions) {
+            await saveAnswers(db, id, item.position, item.question.type === "yes-no-matrix"
+                ? item.question.statements!.map((row) => matrixAnswerId(row.id, row.correctAnswer)) : item.question.correctAnswers);
+            if (item !== final) await confirmTrainingAnswer(db, id, item.position);
+        }
+        await setCurrentPosition(db, id, final.position);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        expect(screen.queryByRole("button", { name: "Finish simulation" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Confirm answer" }));
+        await waitFor(() => expect(within(screen.getByRole("complementary")).getByRole("button", { name: "Finish simulation" })).toBeTruthy());
+        expect((await getSimulation(db, id))!.questions.every((item) => item.locked)).toBe(true);
+        expect(navigation.push).not.toHaveBeenCalled();
+    });
+
+    it("still submits an Exam with every question unanswered and unlocked", async () => {
+        const { db, id, fetchMock } = await completionSetup("exam", 4, 0);
+        const warning = vi.spyOn(window, "confirm").mockReturnValue(true);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        expect(screen.getAllByRole("button", { name: "Submit exam" })).toHaveLength(2);
+        expect(screen.getByText("Unanswered: 4", { exact: false })).toBeTruthy();
+        fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Submit exam" }));
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/en/simulations/" + id + "/results"));
+        expect(warning).toHaveBeenCalledWith("4 questions are unanswered. Submit anyway?");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect((await getSimulation(db, id))!.status).toBe("completed");
+    });
+
+    it("disables both Finish buttons and sends only one request for rapid clicks", async () => {
+        const { db, id, fetchMock } = await completionSetup("training", 4, 4);
+        let release!: () => void;
+        const pending = new Promise<void>((resolve) => { release = resolve; });
+        const route = fetchMock.getMockImplementation()!;
+        fetchMock.mockImplementation(async (...args) => { await pending; return route(...args); });
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        const buttons = screen.getAllByRole("button", { name: "Finish simulation" }) as HTMLButtonElement[];
+        fireEvent.click(buttons[0]); fireEvent.click(buttons[0]); fireEvent.click(buttons[1]);
+        expect(buttons.every((button) => button.disabled)).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        release();
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledTimes(1));
+        expect((await getSimulation(db, id))!.status).toBe("completed");
+    });
+
+    it("shows submission errors and allows retrying Finish", async () => {
+        const { db, id, fetchMock } = await completionSetup("training", 4, 4);
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "submitFailed" }), { status: 400 }));
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Finish simulation" }));
+        expect((await screen.findByRole("alert")).textContent).toBe("Could not submit");
+        expect(navigation.push).not.toHaveBeenCalled();
+        const retry = within(screen.getByRole("complementary")).getByRole("button", { name: "Finish simulation" }) as HTMLButtonElement;
+        expect(retry.disabled).toBe(false);
+        fireEvent.click(retry);
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/en/simulations/" + id + "/results"));
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("reaches results if another session has already submitted the simulation", async () => {
+        const { db, id } = await completionSetup("training", 4, 4);
+        render(provider(<SimulationRunner initial={(await getSimulation(db, id))!} />));
+        await submitSimulation(db, id);
+        const completed = (await getSimulation(db, id))!;
+        fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Finish simulation" }));
+        await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/en/simulations/" + id + "/results"));
+        expect(await getSimulation(db, id)).toEqual(completed);
     });
 });

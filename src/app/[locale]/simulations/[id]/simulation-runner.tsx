@@ -23,7 +23,12 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date(initial.startedAt).getTime());
   const autoSubmitting = useRef(false);
+  const submitting = useRef(false);
   const item = simulation.questions[position];
+  const allTrainingLocked = simulation.questions.every((question) => question.locked);
+  const canFinishTraining = simulation.mode === "training" && simulation.status === "in-progress" && allTrainingLocked;
+  const isQuestionCompleted = (question: SimulationView["questions"][number]) => simulation.mode === "training" ? question.locked : isFullyAnswered(question);
+  const completedCount = simulation.questions.filter(isQuestionCompleted).length;
   const elapsed = Math.max(0, Math.floor((now - new Date(simulation.startedAt).getTime()) / 1000));
   const remaining = simulation.durationLimitSeconds === null ? null : Math.max(0, simulation.durationLimitSeconds - elapsed);
 
@@ -36,11 +41,13 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
   }
 
   async function submit(skipWarning = false) {
+    if (submitting.current || (simulation.mode === "training" && (busy || !canFinishTraining))) return;
     const unanswered = simulation.questions.filter((question) => !isFullyAnswered(question)).length;
     if (!skipWarning && unanswered && !window.confirm(t("submitWarning", {count: unanswered}))) return;
+    submitting.current = true;
     setBusy(true); setError("");
     try { await patch({ action: "submit" }); router.push(`/simulations/${simulation.id}/results`); router.refresh(); }
-    catch (value) { setError(value instanceof Error ? value.message : "submitFailed"); setBusy(false); }
+    catch (value) { submitting.current = false; setError(value instanceof Error ? value.message : "submitFailed"); setBusy(false); }
   }
 
   useEffect(() => {
@@ -90,7 +97,6 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
   }
 
   const partial = item.evaluation?.status === "partial";
-  const allTrainingLocked = simulation.questions.every((question) => question.locked);
   return <div className="mx-auto max-w-5xl">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><span className="badge capitalize">{c(simulation.mode)}</span><span className="muted ml-3 text-sm">{t("questionPosition", {position: f.number(position + 1), total: f.number(simulation.questions.length)})}</span></div><div className={`font-mono text-sm font-bold ${remaining !== null && remaining < 60 ? "bad" : ""}`}>{remaining === null ? t("studyTime", {duration: f.duration(elapsed)}) : t("timeLeft", {duration: f.duration(remaining)})}</div></div>
     <div className="grid gap-5 lg:grid-cols-[1fr_250px]">
@@ -107,9 +113,9 @@ export function SimulationRunner({ initial }: { initial: SimulationView }) {
         {simulation.mode === "training" && !item.locked && <button disabled={busy || !isFullyAnswered(item)} className="btn btn-primary mt-6" onClick={confirmAnswer}>{t("confirm")}</button>}
         {simulation.mode === "training" && item.locked && <div className={`mt-6 rounded-xl border p-5 ${item.correct ? "border-green-300 bg-green-50" : partial ? "border-amber-300 bg-amber-50" : "border-red-300 bg-red-50"}`}><h2 className={`font-extrabold ${item.correct ? "good" : partial ? "text-amber-700" : "bad"}`}>{c(item.correct ? "correct" : partial ? "partial" : "incorrect")}</h2>{item.question.type === "yes-no-matrix" && <MatrixCredit item={item} />}{item.question.type === "statement-completion" && <CompletionReview question={item.question} selected={item.selectedAnswers} />}{partial && item.question.type !== "yes-no-matrix" && <p className="mt-1 text-sm text-amber-800">{c("components", {correct: f.number(item.selectedAnswers.filter((id) => item.question.correctAnswers.includes(id)).length), total: f.number(item.question.correctAnswers.length), percent: f.percent((item.evaluation?.score ?? 0) * 100)})}</p>}<p className="mt-2 leading-7">{item.question.explanation}</p>{item.question.learnReference && <a className="mt-3 inline-block font-bold text-blue-700 underline" href={item.question.learnReference.url} target="_blank" rel="noreferrer">{item.question.learnReference.title} ↗</a>}</div>}
         {error && <p className="bad mt-4" role="alert">{translateError(errors, error)}</p>}
-        <div className="mt-7 flex flex-wrap justify-between gap-3"><button className="btn" disabled={busy || position === 0} onClick={() => void navigate(position - 1)}>← {c("previous")}</button><div className="flex gap-2">{simulation.mode === "exam" && <button className="btn" disabled={busy} onClick={toggleReview}>{t(item.forReview ? "removeReview" : "markReview")}</button>}{position < simulation.questions.length - 1 ? <button className="btn btn-primary" disabled={busy} onClick={() => void navigate(position + 1)}>{c("next")} →</button> : simulation.mode === "exam" || allTrainingLocked ? <button className="btn btn-primary" disabled={busy} onClick={() => void submit()}>{t(simulation.mode === "exam" ? "submitExam" : "viewResults")}</button> : null}</div></div>
+        <div className="mt-7 flex flex-wrap justify-between gap-3"><button className="btn" disabled={busy || position === 0} onClick={() => void navigate(position - 1)}>← {c("previous")}</button><div className="flex gap-2">{simulation.mode === "exam" && <button className="btn" disabled={busy} onClick={toggleReview}>{t(item.forReview ? "removeReview" : "markReview")}</button>}{position < simulation.questions.length - 1 ? <button className="btn btn-primary" disabled={busy} onClick={() => void navigate(position + 1)}>{c("next")} →</button> : simulation.mode === "exam" || canFinishTraining ? <button className="btn btn-primary" disabled={busy} onClick={() => void submit()}>{t(simulation.mode === "exam" ? "submitExam" : "finishSimulation")}</button> : null}</div></div>
       </section>
-      <aside className="card h-fit p-5"><h2 className="font-extrabold">{t("navigator")}</h2><div className="mt-4 grid grid-cols-5 gap-2">{simulation.questions.map((question, index) => <button disabled={busy} aria-label={t(question.forReview ? "reviewQuestionLabel" : "questionLabel", {position: f.number(index + 1)})} className={`relative aspect-square rounded-lg border text-sm font-bold ${index === position ? "border-blue-600 bg-blue-600 text-white" : isFullyAnswered(question) ? "border-green-300 bg-green-50" : "border-slate-200 bg-white"}`} onClick={() => void navigate(index)} key={index}>{f.number(index + 1)}{question.forReview && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" />}</button>)}</div><div className="muted mt-4 space-y-1 text-xs"><div><span className="inline-block h-2.5 w-2.5 rounded bg-green-100" /> {t("answered", {count: f.number(simulation.questions.filter(isFullyAnswered).length)})}</div><div>○ {t("unanswered", {count: f.number(simulation.questions.filter((q) => !isFullyAnswered(q)).length)})}</div>{simulation.mode === "exam" && <div><span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" /> {t("forReview", {count: f.number(simulation.questions.filter((q) => q.forReview).length)})}</div>}</div>{simulation.mode === "exam" && <button disabled={busy} className="btn mt-5 w-full" onClick={() => void submit()}>{t("submitExam")}</button>}</aside>
+      <aside className="card h-fit p-5"><h2 className="font-extrabold">{t("navigator")}</h2><div className="mt-4 grid grid-cols-5 gap-2">{simulation.questions.map((question, index) => <button disabled={busy} aria-label={t(question.forReview ? "reviewQuestionLabel" : "questionLabel", {position: f.number(index + 1)})} className={`relative aspect-square rounded-lg border text-sm font-bold ${index === position ? "border-blue-600 bg-blue-600 text-white" : isQuestionCompleted(question) ? "border-green-300 bg-green-50" : "border-slate-200 bg-white"}`} onClick={() => void navigate(index)} key={index}>{f.number(index + 1)}{question.forReview && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" />}</button>)}</div><div className="muted mt-4 space-y-1 text-xs"><div><span className="inline-block h-2.5 w-2.5 rounded bg-green-100" /> {t(simulation.mode === "training" ? "completedQuestions" : "answered", {count: f.number(completedCount)})}</div><div>○ {t(simulation.mode === "training" ? "questionsRemaining" : "unanswered", {count: f.number(simulation.questions.length - completedCount)})}</div>{simulation.mode === "exam" && <div><span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" /> {t("forReview", {count: f.number(simulation.questions.filter((q) => q.forReview).length)})}</div>}</div>{(simulation.mode === "exam" || canFinishTraining) && <button disabled={busy} className={simulation.mode === "training" ? "btn btn-primary mt-5 w-full" : "btn mt-5 w-full"} onClick={() => void submit()}>{t(simulation.mode === "exam" ? "submitExam" : "finishSimulation")}</button>}</aside>
     </div>
   </div>;
 }
